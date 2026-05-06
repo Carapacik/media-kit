@@ -109,33 +109,51 @@ update_package_swift() {
   local platform="$2"
   local variant="$3"
   local flavor="$4"
-  local checksum="$5"
-  local zip_name="libmpv-xcframeworks_${VERSION}_${platform}-universal-${variant}-${flavor}.zip"
-  local url="https://github.com/${REPO}/releases/download/${VERSION}/${zip_name}"
+  shift 4
+  local frameworks=("$@")
+  local artifact_base="https://github.com/${REPO}/releases/download/${VERSION}/libmpv-xcframeworks_${VERSION}_${platform}-universal-${variant}-${flavor}"
 
   [[ -f "$path" ]] || return
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "Would update ${path}"
-    return
+  else
+    FILE_PATH="$path" ARTIFACT_BASE="$artifact_base" ruby -e '
+      path = ENV.fetch("FILE_PATH")
+      artifact_base = ENV.fetch("ARTIFACT_BASE")
+      contents = File.read(path)
+
+      unless contents.sub!(/^let libmpvArtifactBase = ".*"$/, "let libmpvArtifactBase = \"#{artifact_base}\"")
+        abort("libmpvArtifactBase was not found in #{path}")
+      end
+
+      File.write(path, contents)
+    '
   fi
 
-  FILE_PATH="$path" URL="$url" CHECKSUM="$checksum" ruby -e '
-    path = ENV.fetch("FILE_PATH")
-    url = ENV.fetch("URL")
-    checksum = ENV.fetch("CHECKSUM")
-    contents = File.read(path)
+  for framework in "${frameworks[@]}"; do
+    local zip_name="libmpv-xcframeworks_${VERSION}_${platform}-universal-${variant}-${flavor}_${framework}.zip"
+    local checksum
+    checksum="$(digest_for "$zip_name")"
 
-    unless contents.sub!(%r{https://github\.com/[^"]+/releases/download/v[^"]+/libmpv-xcframeworks_[^"]+\.zip}, url)
-      abort("SwiftPM binaryTarget URL was not found in #{path}")
-    end
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      echo "Would update ${framework}: ${checksum}"
+    else
+      FILE_PATH="$path" FRAMEWORK="$framework" CHECKSUM="$checksum" ruby -e '
+        path = ENV.fetch("FILE_PATH")
+        framework = ENV.fetch("FRAMEWORK")
+        checksum = ENV.fetch("CHECKSUM")
+        contents = File.read(path)
+        pattern = /^(\s*"#{Regexp.escape(framework)}":\s*")[^"]+(".*)$/
 
-    unless contents.sub!(/checksum:\s*"[^"]+"/, "checksum: \"#{checksum}\"")
-      abort("SwiftPM binaryTarget checksum was not found in #{path}")
-    end
+        unless contents.sub!(pattern, "\\1#{checksum}\\2")
+          abort("Checksum for #{framework} was not found in #{path}")
+        end
 
-    File.write(path, contents)
-  '
+        File.write(path, contents)
+      '
+    fi
+  done
 }
 
 update_artifact() {
@@ -153,10 +171,8 @@ update_artifact() {
   update_makefile "$makefile_path" "$VERSION" "$tar_checksum"
 
   if [[ -f "$package_path" ]]; then
-    local zip_name="libmpv-xcframeworks_${VERSION}_${platform}-universal-${variant}-${flavor}.zip"
-    local zip_checksum
-    zip_checksum="$(digest_for "$zip_name")"
-    update_package_swift "$package_path" "$platform" "$variant" "$flavor" "$zip_checksum"
+    shift 6
+    update_package_swift "$package_path" "$platform" "$variant" "$flavor" "$@"
   fi
 
   echo "${label}: ${tar_checksum}"
@@ -168,7 +184,17 @@ update_artifact \
   "audio" \
   "default" \
   "libs/ios/media_kit_libs_ios_audio/ios/Makefile" \
-  "libs/ios/media_kit_libs_ios_audio/ios/media_kit_libs_ios_audio/Package.swift"
+  "libs/ios/media_kit_libs_ios_audio/ios/media_kit_libs_ios_audio/Package.swift" \
+  "Avcodec" \
+  "Avfilter" \
+  "Avformat" \
+  "Avutil" \
+  "Mbedcrypto" \
+  "Mbedtls" \
+  "Mbedx509" \
+  "Mpv" \
+  "Swresample" \
+  "Swscale"
 
 update_artifact \
   "iOS video" \
@@ -176,7 +202,25 @@ update_artifact \
   "video" \
   "default" \
   "libs/ios/media_kit_libs_ios_video/ios/Makefile" \
-  "libs/ios/media_kit_libs_ios_video/ios/media_kit_libs_ios_video/Package.swift"
+  "libs/ios/media_kit_libs_ios_video/ios/media_kit_libs_ios_video/Package.swift" \
+  "Ass" \
+  "Avcodec" \
+  "Avfilter" \
+  "Avformat" \
+  "Avutil" \
+  "Dav1d" \
+  "Freetype" \
+  "Fribidi" \
+  "Harfbuzz" \
+  "Mbedcrypto" \
+  "Mbedtls" \
+  "Mbedx509" \
+  "Mpv" \
+  "Png16" \
+  "Swresample" \
+  "Swscale" \
+  "Uchardet" \
+  "Xml2"
 
 update_artifact \
   "macOS audio" \
@@ -184,7 +228,17 @@ update_artifact \
   "audio" \
   "full" \
   "libs/macos/media_kit_libs_macos_audio/macos/Makefile" \
-  "libs/macos/media_kit_libs_macos_audio/macos/media_kit_libs_macos_audio/Package.swift"
+  "libs/macos/media_kit_libs_macos_audio/macos/media_kit_libs_macos_audio/Package.swift" \
+  "Avcodec" \
+  "Avfilter" \
+  "Avformat" \
+  "Avutil" \
+  "Mbedcrypto" \
+  "Mbedtls" \
+  "Mbedx509" \
+  "Mpv" \
+  "Swresample" \
+  "Swscale"
 
 update_artifact \
   "macOS video" \
@@ -192,7 +246,25 @@ update_artifact \
   "video" \
   "default" \
   "libs/macos/media_kit_libs_macos_video/macos/Makefile" \
-  "libs/macos/media_kit_libs_macos_video/macos/media_kit_libs_macos_video/Package.swift"
+  "libs/macos/media_kit_libs_macos_video/macos/media_kit_libs_macos_video/Package.swift" \
+  "Ass" \
+  "Avcodec" \
+  "Avfilter" \
+  "Avformat" \
+  "Avutil" \
+  "Dav1d" \
+  "Freetype" \
+  "Fribidi" \
+  "Harfbuzz" \
+  "Mbedcrypto" \
+  "Mbedtls" \
+  "Mbedx509" \
+  "Mpv" \
+  "Png16" \
+  "Swresample" \
+  "Swscale" \
+  "Uchardet" \
+  "Xml2"
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "Dry run completed. No files were changed."
