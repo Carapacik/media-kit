@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO="media-kit/libmpv-darwin-build"
 DRY_RUN=0
-VERSION="v0.6.3"
+VERSION="v0.7.0"
 VERSION_SET=0
 
 usage() {
@@ -13,7 +13,7 @@ Usage:
 
 Example:
   tool/update_darwin_libmpv_artifacts.sh
-  tool/update_darwin_libmpv_artifacts.sh v0.6.3
+  tool/update_darwin_libmpv_artifacts.sh v0.7.0
 
 The script reads GitHub release asset digests and updates Darwin libmpv artifact
 versions/checksums. Existing CocoaPods Makefiles use .tar.gz assets. Future
