@@ -4,11 +4,13 @@
 /// All rights reserved.
 /// Use of this source code is governed by MIT license that can be found in the LICENSE file.
 import 'dart:ffi';
+import 'dart:isolate';
 
 import 'package:media_kit/generated/libmpv/bindings.dart' as generated;
 import 'package:media_kit/src/player/native/core/execmem_restriction.dart';
 import 'package:media_kit/src/player/native/core/initializer_isolate.dart';
 import 'package:media_kit/src/player/native/core/initializer_native_callable.dart';
+import 'package:media_kit/src/values.dart';
 
 /// {@template initializer}
 ///
@@ -38,6 +40,9 @@ class Initializer {
     Future<void> Function(Pointer<generated.mpv_event>) callback, {
     Map<String, String> options = const {},
   }) async {
+    if (kDebugMode && _isMainIsolate()) {
+      return InitializerIsolate().create(callback, options: options);
+    }
     if (!isExecmemRestricted) {
       return InitializerNativeCallable(mpv).create(callback, options: options);
     } else {
@@ -47,10 +52,16 @@ class Initializer {
 
   /// Disposes [Pointer<mpv_handle>].
   void dispose(Pointer<generated.mpv_handle> ctx) {
+    if (kDebugMode && _isMainIsolate()) {
+      InitializerIsolate().dispose(mpv, ctx);
+      return;
+    }
     if (!isExecmemRestricted) {
       InitializerNativeCallable(mpv).dispose(ctx);
     } else {
       InitializerIsolate().dispose(mpv, ctx);
     }
   }
+
+  bool _isMainIsolate() => Isolate.current.debugName == 'main';
 }
