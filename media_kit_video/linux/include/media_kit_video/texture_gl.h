@@ -6,10 +6,6 @@
 // Use of this source code is governed by MIT license that can be found in the
 // LICENSE file.
 
-// The file is moded for the purpose of triple buffering using mailbox model.
-// Copyright © 2025 Predidit
-// All rights reserved.
-
 #ifndef TEXTURE_GL_H_
 #define TEXTURE_GL_H_
 
@@ -25,6 +21,13 @@ G_DECLARE_FINAL_TYPE(TextureGL, texture_gl, TEXTURE_GL, TEXTURE_GL, FlTextureGL)
   (G_TYPE_CHECK_INSTANCE_CAST((obj), texture_gl_get_type(), TextureGL))
 
 TextureGL* texture_gl_new(VideoOutput* video_output);
+
+/**
+ * @brief Initializes and checks required EGL/GL extension function pointers.
+ *
+ * @return TRUE if hardware renderer required functions/extensions are available.
+ */
+gboolean texture_gl_init_egl_extensions(EGLDisplay egl_display);
 
 /**
  * @brief Checks if texture needs resize and performs it if necessary.

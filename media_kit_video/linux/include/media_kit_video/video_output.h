@@ -6,10 +6,6 @@
 // Use of this source code is governed by MIT license that can be found in the
 // LICENSE file.
 
-// The file is moded for the purpose of triple buffering using mailbox model.
-// Copyright © 2025 Predidit
-// All rights reserved.
-
 #ifndef VIDEO_OUTPUT_H_
 #define VIDEO_OUTPUT_H_
 
@@ -41,6 +37,8 @@ typedef void (*TextureUpdateCallback)(gint64 id,
                                       gpointer context);
 
 #define VIDEO_OUTPUT_TYPE (video_output_get_type())
+
+typedef struct _VideoOutput VideoOutput;
 
 G_DECLARE_FINAL_TYPE(VideoOutput,
                      video_output,

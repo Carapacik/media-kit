@@ -26,8 +26,14 @@ static void video_output_manager_init(VideoOutputManager* self) {
 
 static void video_output_manager_dispose(GObject* object) {
   VideoOutputManager* self = VIDEO_OUTPUT_MANAGER(object);
-  g_hash_table_unref(self->video_outputs);
-  delete self->gl_render_thread;
+  if (self->video_outputs != NULL) {
+    g_hash_table_unref(self->video_outputs);
+    self->video_outputs = NULL;
+  }
+  if (self->gl_render_thread != NULL) {
+    delete self->gl_render_thread;
+    self->gl_render_thread = NULL;
+  }
   G_OBJECT_CLASS(video_output_manager_parent_class)->dispose(object);
 }
 
@@ -52,7 +58,8 @@ void video_output_manager_create(VideoOutputManager* self,
                                  gpointer texture_update_callback_context) {
   if (!g_hash_table_contains(self->video_outputs, GINT_TO_POINTER(handle))) {
     g_autoptr(VideoOutput) video_output = video_output_new(
-        self->texture_registrar, self->view, handle, configuration, self->gl_render_thread);
+        self->texture_registrar, self->view, handle, configuration,
+        self->gl_render_thread);
     video_output_set_texture_update_callback(
         video_output, texture_update_callback, texture_update_callback_context);
     g_hash_table_insert(self->video_outputs, GINT_TO_POINTER(handle),

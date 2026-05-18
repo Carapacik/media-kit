@@ -6,173 +6,436 @@
 // Use of this source code is governed by MIT license that can be found in the
 // LICENSE file.
 
-// The file is moded for the purpose of triple buffering using mailbox model.
-// Copyright © 2025 Predidit
-// All rights reserved.
-
 #include "include/media_kit_video/texture_gl.h"
+
 #include "include/media_kit_video/gl_render_thread.h"
 
-#include <epoxy/gl.h>
 #include <epoxy/egl.h>
-#include <atomic>
+#include <epoxy/gl.h>
 
-// Number of buffers for mailbox triple buffering
+#include <atomic>
+#include <new>
+
 #define NUM_BUFFERS 3
 
-// Buffer structure for mailbox triple buffering
-// Each buffer has its own GPU resources
+using MediaKitEGLCreateImageKHRProc =
+    EGLImageKHR (*)(EGLDisplay, EGLContext, EGLenum, EGLClientBuffer,
+                    const EGLint*);
+using MediaKitEGLDestroyImageKHRProc = EGLBoolean (*)(EGLDisplay, EGLImageKHR);
+using MediaKitGLEGLImageTargetTexture2DOESProc = void (*)(GLenum,
+                                                          GLeglImageOES);
+using MediaKitEGLCreateSyncKHRProc =
+    EGLSyncKHR (*)(EGLDisplay, EGLenum, const EGLint*);
+using MediaKitEGLDestroySyncKHRProc = EGLBoolean (*)(EGLDisplay, EGLSyncKHR);
+using MediaKitEGLWaitSyncKHRProc = EGLint (*)(EGLDisplay, EGLSyncKHR, EGLint);
+using MediaKitEGLClientWaitSyncKHRProc =
+    EGLint (*)(EGLDisplay, EGLSyncKHR, EGLint, EGLTimeKHR);
+
+static MediaKitEGLCreateImageKHRProc media_kit_egl_create_image_khr = nullptr;
+static MediaKitEGLDestroyImageKHRProc media_kit_egl_destroy_image_khr =
+    nullptr;
+static MediaKitGLEGLImageTargetTexture2DOESProc
+    media_kit_gl_egl_image_target_texture_2d_oes = nullptr;
+static MediaKitEGLCreateSyncKHRProc media_kit_egl_create_sync_khr = nullptr;
+static MediaKitEGLDestroySyncKHRProc media_kit_egl_destroy_sync_khr = nullptr;
+static MediaKitEGLWaitSyncKHRProc media_kit_egl_wait_sync_khr = nullptr;
+static MediaKitEGLClientWaitSyncKHRProc media_kit_egl_client_wait_sync_khr =
+    nullptr;
+
 typedef struct {
-  guint32 fbo;              // FBO for mpv rendering
-  guint32 texture;          // Texture attached to FBO (mpv side)
-  EGLImageKHR egl_image;    // EGLImage for sharing between contexts
-  guint32 flutter_texture;  // Flutter's texture bound to EGLImage
-  gboolean flutter_texture_valid;  // Whether Flutter texture is valid
-  std::atomic<EGLSyncKHR> render_sync;  // Sync created after mpv render (atomic for cross-thread access)
+  guint32 fbo;
+  guint32 texture;
+  EGLImageKHR egl_image;
+  guint32 flutter_texture;
+  gboolean flutter_texture_valid;
+  std::atomic<EGLSyncKHR> render_sync;
 } RenderBuffer;
 
-/**
- * Mailbox Triple Buffering Model with Drain-Only Consumer:
- * 
- * Three buffers with fixed roles that rotate via atomic pointer swaps:
- * - back:    Producer (GL thread) renders to this buffer
- * - mailbox: Holds the latest complete frame with dirty flag
- * - front:   Consumer (Flutter main thread) reads from this buffer
- * 
- * Key design: mailbox_state combines index and dirty flag in ONE atomic:
- *   mailbox_state = (dirty << 8) | index
- * This eliminates race conditions between checking dirty and swapping.
- * 
- * Producer workflow (GL thread):
- *   1. Render frame to back buffer
- *   2. Atomic exchange: put (dirty=1, back_index) into mailbox, get old index
- *   3. Old mailbox index becomes new back buffer
- * 
- * Consumer workflow (Flutter main thread) - DRAIN-ONLY:
- *   1. Atomic CAS: if dirty=1, swap (dirty=0, front_index) with mailbox
- *   2. If CAS succeeds: got new frame, update front_index
- *   3. If dirty=0: no new frame, keep current front buffer
- *   4. Display front buffer
- * 
- * Drain-only semantics ensures:
- * - Consumer only swaps when mailbox has NEW content (dirty=1)
- * - Consumer never puts its displayed frame back unless getting new one
- * - Producer can always safely overwrite mailbox content
- * - Single atomic operation prevents dirty/index race condition
- */
 struct _TextureGL {
   FlTextureGL parent_instance;
-  
-  // The three buffers for mailbox model
+
   RenderBuffer buffers[NUM_BUFFERS];
-  
-  // Mailbox model: atomic indices for lock-free buffer swapping
-  // Producer (GL thread) owns back_index exclusively
-  // Consumer (main thread) owns front_index exclusively
-  // mailbox uses a combined atomic to avoid race between index and dirty flag
-  int back_index;                      // Producer's current buffer (GL thread only)
-  int front_index;                     // Consumer's current buffer (main thread only)
-  // Combined mailbox state: index in lower bits, dirty flag in upper bit
-  // This ensures atomic swap of both index and dirty flag together
-  // Encoding: (dirty << 8) | index, where dirty is 0 or 1, index is 0-2
-  std::atomic<int> mailbox_state;      // Combined: dirty flag (bit 8) + buffer index (bits 0-7)
-  
+
+  int back_index;
+  int front_index;
+  std::atomic<int> mailbox_state;
+
   guint32 current_width;
   guint32 current_height;
   gboolean buffers_initialized;
   gboolean initialization_posted;
-  std::atomic<gboolean> resizing;      // Flag to indicate resize in progress
-  
+  std::atomic<gboolean> resizing;
+  std::atomic<gboolean> hardware_failed;
+  guint32 dummy_texture;
+  gint32 consecutive_render_errors;
+  gboolean render_gl_error_logged;
+  gboolean flutter_texture_error_logged;
+  gboolean skip_frame_error_logged;
+  gboolean sync_error_logged;
+  gboolean wait_sync_error_logged;
+
   VideoOutput* video_output;
 };
 
 G_DEFINE_TYPE(TextureGL, texture_gl, fl_texture_gl_get_type())
 
+gboolean texture_gl_init_egl_extensions(EGLDisplay egl_display) {
+  if (egl_display == EGL_NO_DISPLAY) {
+    return FALSE;
+  }
+
+  media_kit_egl_create_image_khr =
+      reinterpret_cast<MediaKitEGLCreateImageKHRProc>(
+          eglGetProcAddress("eglCreateImageKHR"));
+  media_kit_egl_destroy_image_khr =
+      reinterpret_cast<MediaKitEGLDestroyImageKHRProc>(
+          eglGetProcAddress("eglDestroyImageKHR"));
+  media_kit_gl_egl_image_target_texture_2d_oes =
+      reinterpret_cast<MediaKitGLEGLImageTargetTexture2DOESProc>(
+          eglGetProcAddress("glEGLImageTargetTexture2DOES"));
+  media_kit_egl_create_sync_khr =
+      reinterpret_cast<MediaKitEGLCreateSyncKHRProc>(
+          eglGetProcAddress("eglCreateSyncKHR"));
+  media_kit_egl_destroy_sync_khr =
+      reinterpret_cast<MediaKitEGLDestroySyncKHRProc>(
+          eglGetProcAddress("eglDestroySyncKHR"));
+  media_kit_egl_wait_sync_khr =
+      reinterpret_cast<MediaKitEGLWaitSyncKHRProc>(
+          eglGetProcAddress("eglWaitSyncKHR"));
+  media_kit_egl_client_wait_sync_khr =
+      reinterpret_cast<MediaKitEGLClientWaitSyncKHRProc>(
+          eglGetProcAddress("eglClientWaitSyncKHR"));
+
+  if (!epoxy_has_egl_extension(egl_display, "EGL_KHR_image_base") ||
+      !epoxy_has_egl_extension(egl_display, "EGL_KHR_gl_texture_2D_image") ||
+      !epoxy_has_egl_extension(egl_display, "EGL_KHR_fence_sync")) {
+    return FALSE;
+  }
+
+  return media_kit_egl_create_image_khr != nullptr &&
+         media_kit_egl_destroy_image_khr != nullptr &&
+         media_kit_gl_egl_image_target_texture_2d_oes != nullptr &&
+         media_kit_egl_create_sync_khr != nullptr &&
+         media_kit_egl_destroy_sync_khr != nullptr &&
+         media_kit_egl_client_wait_sync_khr != nullptr;
+}
+
+static gboolean texture_gl_fail(TextureGL* self, const char* message) {
+  if (self == nullptr) {
+    g_printerr("media_kit: TextureGL: %s\n", message);
+    return FALSE;
+  }
+
+  gboolean already_failed =
+      self->hardware_failed.exchange(TRUE, std::memory_order_acq_rel);
+  if (!already_failed) {
+    g_printerr("media_kit: TextureGL: %s\n", message);
+  }
+
+  self->buffers_initialized = FALSE;
+  self->resizing.store(FALSE, std::memory_order_release);
+  return FALSE;
+}
+
+static gboolean texture_gl_skip_frame(TextureGL* self, const char* message) {
+  if (self != nullptr && !self->skip_frame_error_logged) {
+    g_printerr("media_kit: TextureGL: %s\n", message);
+    self->skip_frame_error_logged = TRUE;
+  }
+  return FALSE;
+}
+
+struct SavedTextureState {
+  GLint active_texture;
+  GLint texture_binding_2d;
+};
+
+static SavedTextureState save_texture_state() {
+  SavedTextureState state{GL_TEXTURE0, 0};
+  glGetIntegerv(GL_ACTIVE_TEXTURE, &state.active_texture);
+  glActiveTexture(GL_TEXTURE0);
+  glGetIntegerv(GL_TEXTURE_BINDING_2D, &state.texture_binding_2d);
+  return state;
+}
+
+static void restore_texture_state(const SavedTextureState& state) {
+  glBindTexture(GL_TEXTURE_2D, state.texture_binding_2d);
+  glActiveTexture(state.active_texture);
+}
+
+static void clear_gl_errors() {
+  while (glGetError() != GL_NO_ERROR) {
+  }
+}
+
+static gboolean texture_gl_return_dummy_texture(TextureGL* self,
+                                                guint32* target,
+                                                guint32* name,
+                                                guint32* width,
+                                                guint32* height) {
+  if (self == nullptr || target == nullptr || name == nullptr ||
+      width == nullptr || height == nullptr) {
+    return FALSE;
+  }
+
+  if (self->dummy_texture == 0) {
+    glGenTextures(1, &self->dummy_texture);
+    if (self->dummy_texture == 0) {
+      return FALSE;
+    }
+
+    SavedTextureState saved_state = save_texture_state();
+    glBindTexture(GL_TEXTURE_2D, self->dummy_texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    const guint32 pixel = 0x00000000;
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, &pixel);
+    restore_texture_state(saved_state);
+  }
+
+  *target = GL_TEXTURE_2D;
+  *name = self->dummy_texture;
+  *width = 1;
+  *height = 1;
+  return TRUE;
+}
+
+static void clear_render_buffer(EGLDisplay egl_display, RenderBuffer* buf) {
+  if (buf == nullptr) {
+    return;
+  }
+
+  EGLSyncKHR sync =
+      buf->render_sync.exchange(EGL_NO_SYNC_KHR, std::memory_order_acq_rel);
+  if (sync != EGL_NO_SYNC_KHR && egl_display != EGL_NO_DISPLAY &&
+      media_kit_egl_destroy_sync_khr != nullptr) {
+    media_kit_egl_destroy_sync_khr(egl_display, sync);
+  }
+
+  if (buf->egl_image != EGL_NO_IMAGE_KHR) {
+    if (egl_display != EGL_NO_DISPLAY &&
+        media_kit_egl_destroy_image_khr != nullptr) {
+      media_kit_egl_destroy_image_khr(egl_display, buf->egl_image);
+    }
+    buf->egl_image = EGL_NO_IMAGE_KHR;
+  }
+
+  if (buf->texture != 0) {
+    glDeleteTextures(1, &buf->texture);
+    buf->texture = 0;
+  }
+
+  if (buf->fbo != 0) {
+    glDeleteFramebuffers(1, &buf->fbo);
+    buf->fbo = 0;
+  }
+
+  buf->flutter_texture_valid = FALSE;
+}
+
+static void clear_flutter_texture(RenderBuffer* buf) {
+  if (buf == nullptr) {
+    return;
+  }
+
+  if (buf->flutter_texture != 0) {
+    glDeleteTextures(1, &buf->flutter_texture);
+    buf->flutter_texture = 0;
+  }
+
+  buf->flutter_texture_valid = FALSE;
+}
+
+static gboolean create_render_buffer(RenderBuffer* buf,
+                                     EGLDisplay egl_display,
+                                     EGLContext egl_context,
+                                     guint32 width,
+                                     guint32 height) {
+  if (buf == nullptr || egl_display == EGL_NO_DISPLAY ||
+      egl_context == EGL_NO_CONTEXT || width < 1 || height < 1 ||
+      media_kit_egl_create_image_khr == nullptr) {
+    return FALSE;
+  }
+
+  glGenFramebuffers(1, &buf->fbo);
+  if (buf->fbo == 0) {
+    g_printerr("media_kit: TextureGL: Failed to create FBO.\n");
+    return FALSE;
+  }
+
+  glBindFramebuffer(GL_FRAMEBUFFER, buf->fbo);
+
+  glGenTextures(1, &buf->texture);
+  if (buf->texture == 0) {
+    g_printerr("media_kit: TextureGL: Failed to create GL texture.\n");
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return FALSE;
+  }
+
+  glBindTexture(GL_TEXTURE_2D, buf->texture);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+  clear_gl_errors();
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA,
+               GL_UNSIGNED_BYTE, nullptr);
+
+  GLenum gl_error = glGetError();
+  if (gl_error != GL_NO_ERROR) {
+    g_printerr(
+        "media_kit: TextureGL: glTexImage2D failed. Error: 0x%x\n",
+        gl_error);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return FALSE;
+  }
+
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                         buf->texture, 0);
+
+  GLenum framebuffer_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+  if (framebuffer_status != GL_FRAMEBUFFER_COMPLETE) {
+    g_printerr("media_kit: TextureGL: FBO incomplete. Status: 0x%x\n",
+               framebuffer_status);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return FALSE;
+  }
+
+  EGLint egl_image_attribs[] = {EGL_NONE};
+  buf->egl_image = media_kit_egl_create_image_khr(
+      egl_display, egl_context, EGL_GL_TEXTURE_2D_KHR,
+      reinterpret_cast<EGLClientBuffer>(static_cast<guintptr>(buf->texture)),
+      egl_image_attribs);
+
+  if (buf->egl_image == EGL_NO_IMAGE_KHR) {
+    g_printerr(
+        "media_kit: TextureGL: eglCreateImageKHR failed. Error: 0x%x\n",
+        eglGetError());
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return FALSE;
+  }
+
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  glBindTexture(GL_TEXTURE_2D, 0);
+
+  buf->flutter_texture_valid = FALSE;
+  buf->render_sync.store(EGL_NO_SYNC_KHR, std::memory_order_release);
+
+  return TRUE;
+}
+
 static void texture_gl_init(TextureGL* self) {
+  new (&self->mailbox_state) std::atomic<int>(2);
+  new (&self->resizing) std::atomic<gboolean>(FALSE);
+  new (&self->hardware_failed) std::atomic<gboolean>(FALSE);
+
   for (int i = 0; i < NUM_BUFFERS; i++) {
+    new (&self->buffers[i].render_sync)
+        std::atomic<EGLSyncKHR>(EGL_NO_SYNC_KHR);
     self->buffers[i].fbo = 0;
     self->buffers[i].texture = 0;
     self->buffers[i].egl_image = EGL_NO_IMAGE_KHR;
     self->buffers[i].flutter_texture = 0;
     self->buffers[i].flutter_texture_valid = FALSE;
-    self->buffers[i].render_sync.store(EGL_NO_SYNC_KHR, std::memory_order_relaxed);
+    self->buffers[i].render_sync.store(EGL_NO_SYNC_KHR,
+                                       std::memory_order_relaxed);
   }
-  
-  // Initialize mailbox model indices
-  // back=0 for producer, front=1 for consumer, mailbox=2 initially (not dirty)
+
   self->back_index = 0;
   self->front_index = 1;
-  // mailbox_state = (dirty << 8) | index = (0 << 8) | 2 = 2
   self->mailbox_state.store(2, std::memory_order_relaxed);
-  
+
   self->current_width = 1;
   self->current_height = 1;
   self->buffers_initialized = FALSE;
   self->initialization_posted = FALSE;
   self->resizing.store(FALSE, std::memory_order_relaxed);
+  self->hardware_failed.store(FALSE, std::memory_order_relaxed);
+  self->dummy_texture = 0;
+  self->consecutive_render_errors = 0;
+  self->render_gl_error_logged = FALSE;
+  self->flutter_texture_error_logged = FALSE;
+  self->skip_frame_error_logged = FALSE;
+  self->sync_error_logged = FALSE;
+  self->wait_sync_error_logged = FALSE;
   self->video_output = NULL;
 }
 
 static void texture_gl_dispose(GObject* object) {
   TextureGL* self = TEXTURE_GL(object);
-  VideoOutput* video_output = self->video_output;
-  GLRenderThread* gl_thread = video_output_get_gl_render_thread(video_output);
-  
-  // Clean up Flutter's textures (main thread)
-  for (int i = 0; i < NUM_BUFFERS; i++) {
-    if (self->buffers[i].flutter_texture != 0) {
-      glDeleteTextures(1, &self->buffers[i].flutter_texture);
-      self->buffers[i].flutter_texture = 0;
+  self->hardware_failed.store(TRUE, std::memory_order_release);
+  self->resizing.store(FALSE, std::memory_order_release);
+
+  // Flutter-facing textures are created in Flutter's texture callback
+  // context. During shutdown that context may already be unavailable, so skip
+  // GL deletion instead of issuing deletes against an unrelated/no context.
+  if (eglGetCurrentContext() != EGL_NO_CONTEXT) {
+    for (int i = 0; i < NUM_BUFFERS; i++) {
+      clear_flutter_texture(&self->buffers[i]);
     }
+
+    if (self->dummy_texture != 0) {
+      glDeleteTextures(1, &self->dummy_texture);
+      self->dummy_texture = 0;
+    }
+  } else {
+    for (int i = 0; i < NUM_BUFFERS; i++) {
+      self->buffers[i].flutter_texture = 0;
+      self->buffers[i].flutter_texture_valid = FALSE;
+    }
+    self->dummy_texture = 0;
   }
-  
-  // Clean up GPU resources in dedicated GL thread
-  if (video_output != NULL && gl_thread != NULL) {
-    gl_thread->PostAndWait([self, video_output]() {
-      EGLDisplay egl_display = video_output_get_egl_display(video_output);
-      EGLContext egl_context = video_output_get_egl_context(video_output);
-      
-      // Clean up all buffers
-      for (int i = 0; i < NUM_BUFFERS; i++) {
-        RenderBuffer* buf = &self->buffers[i];
-        
-        // Clean up EGLSyncKHR
-        EGLSyncKHR sync = buf->render_sync.load(std::memory_order_acquire);
-        if (sync != EGL_NO_SYNC_KHR) {
-          eglDestroySyncKHR(egl_display, sync);
-          buf->render_sync.store(EGL_NO_SYNC_KHR, std::memory_order_release);
-        }
-        
-        // Clean up EGLImage
-        if (buf->egl_image != EGL_NO_IMAGE_KHR) {
-          eglDestroyImageKHR(egl_display, buf->egl_image);
-          buf->egl_image = EGL_NO_IMAGE_KHR;
-        }
+
+  VideoOutput* video_output = self->video_output;
+  GLRenderThread* gl_thread =
+      video_output != NULL ? video_output_get_gl_render_thread(video_output)
+                           : NULL;
+
+  auto clear_buffers = [self, video_output]() {
+    EGLDisplay egl_display =
+        video_output != NULL ? video_output_get_egl_display(video_output)
+                             : EGL_NO_DISPLAY;
+    EGLContext egl_context =
+        video_output != NULL ? video_output_get_egl_context(video_output)
+                             : EGL_NO_CONTEXT;
+
+    if (egl_display != EGL_NO_DISPLAY && egl_context != EGL_NO_CONTEXT) {
+      if (!eglMakeCurrent(egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                          egl_context)) {
+        g_printerr(
+            "media_kit: TextureGL: eglMakeCurrent failed during dispose. "
+            "Error: 0x%x\n",
+            eglGetError());
       }
-      
-      // Clean up mpv's OpenGL resources (in mpv's isolated context)
-      if (egl_context != EGL_NO_CONTEXT) {
-        eglMakeCurrent(egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, egl_context);
-        
-        for (int i = 0; i < NUM_BUFFERS; i++) {
-          RenderBuffer* buf = &self->buffers[i];
-          
-          if (buf->texture != 0) {
-            glDeleteTextures(1, &buf->texture);
-            buf->texture = 0;
-          }
-          if (buf->fbo != 0) {
-            glDeleteFramebuffers(1, &buf->fbo);
-            buf->fbo = 0;
-          }
-        }
-      }
-    });
+    }
+
+    for (int i = 0; i < NUM_BUFFERS; i++) {
+      clear_render_buffer(egl_display, &self->buffers[i]);
+    }
+  };
+
+  if (gl_thread != NULL) {
+    gl_thread->PostAndWait(clear_buffers);
+  } else {
+    clear_buffers();
   }
-  
+
   self->current_width = 1;
   self->current_height = 1;
+  self->buffers_initialized = FALSE;
+  self->back_index = 0;
+  self->front_index = 1;
+  self->mailbox_state.store(2, std::memory_order_release);
   self->video_output = NULL;
+
   G_OBJECT_CLASS(texture_gl_parent_class)->dispose(object);
 }
 
@@ -187,308 +450,418 @@ TextureGL* texture_gl_new(VideoOutput* video_output) {
   return self;
 }
 
-/**
- * Called from the dedicated GL rendering thread.
- * Creates or resizes all three buffers for the mailbox model.
- */
-void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 required_height) {
-  VideoOutput* video_output = self->video_output;
-  
+void texture_gl_check_and_resize(TextureGL* self,
+                                 gint64 required_width,
+                                 gint64 required_height) {
+  if (self == nullptr || self->video_output == nullptr) {
+    return;
+  }
+
+  if (self->hardware_failed.load(std::memory_order_acquire)) {
+    return;
+  }
+
   if (required_width < 1 || required_height < 1) {
     return;
   }
-  
+
   gboolean first_frame = !self->buffers_initialized;
-  gboolean resize = self->current_width != (guint32)required_width ||
-                    self->current_height != (guint32)required_height;
-  
+  gboolean resize = self->current_width != static_cast<guint32>(required_width) ||
+                    self->current_height !=
+                        static_cast<guint32>(required_height);
+
   if (!first_frame && !resize) {
     return;
   }
-  
-  EGLDisplay egl_display = video_output_get_egl_display(video_output);
-  EGLContext egl_context = video_output_get_egl_context(video_output);
-  
-  // Switch to mpv's isolated context
-  eglMakeCurrent(egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, egl_context);
-  
-  // Mark as resizing to prevent consumer from accessing buffers
-  self->resizing.store(TRUE, std::memory_order_release);
-  
-  // Free previous resources for all buffers
-  for (int i = 0; i < NUM_BUFFERS; i++) {
-    RenderBuffer* buf = &self->buffers[i];
-    
-    if (!first_frame) {
-      // Wait for any pending GPU work before destroying resources
-      EGLSyncKHR sync = buf->render_sync.load(std::memory_order_acquire);
-      if (sync != EGL_NO_SYNC_KHR) {
-        eglClientWaitSyncKHR(egl_display, sync, 
-                              EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, EGL_FOREVER_KHR);
-        eglDestroySyncKHR(egl_display, sync);
-        buf->render_sync.store(EGL_NO_SYNC_KHR, std::memory_order_release);
-      }
-      
-      if (buf->egl_image != EGL_NO_IMAGE_KHR) {
-        eglDestroyImageKHR(egl_display, buf->egl_image);
-        buf->egl_image = EGL_NO_IMAGE_KHR;
-      }
-      
-      glDeleteTextures(1, &buf->texture);
-      glDeleteFramebuffers(1, &buf->fbo);
-    }
-    
-    // Create FBO and texture for this buffer
-    glGenFramebuffers(1, &buf->fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, buf->fbo);
-    
-    glGenTextures(1, &buf->texture);
-    glBindTexture(GL_TEXTURE_2D, buf->texture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, required_width, required_height,
-                 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    
-    // Attach texture to FBO
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                           GL_TEXTURE_2D, buf->texture, 0);
-    
-    // Create EGLImage from texture for sharing between contexts
-    EGLint egl_image_attribs[] = { EGL_NONE };
-    buf->egl_image = eglCreateImageKHR(
-        egl_display,
-        egl_context,
-        EGL_GL_TEXTURE_2D_KHR,
-        (EGLClientBuffer)(guintptr)buf->texture,
-        egl_image_attribs);
-    
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    
-    // Mark Flutter texture as invalid (needs recreation)
-    buf->flutter_texture_valid = FALSE;
-    buf->render_sync.store(EGL_NO_SYNC_KHR, std::memory_order_release);
-  }
-  
-  // Flush to ensure textures are ready
-  glFlush();
-  
-  // Reset mailbox model indices
-  self->back_index = 0;
-  self->front_index = 1;
-  // mailbox_state = (dirty << 8) | index = (0 << 8) | 2 = 2
-  self->mailbox_state.store(2, std::memory_order_release);
-  
-  // Mark buffers as initialized and update dimensions
-  self->buffers_initialized = TRUE;
-  self->current_width = required_width;
-  self->current_height = required_height;
-  
-  self->resizing.store(FALSE, std::memory_order_release);
-}
 
-/**
- * Renders mpv frame to the back buffer.
- * Called from the dedicated GL rendering thread.
- */
-gboolean texture_gl_render(TextureGL* self) {
+  self->resizing.store(TRUE, std::memory_order_release);
+
   VideoOutput* video_output = self->video_output;
   EGLDisplay egl_display = video_output_get_egl_display(video_output);
   EGLContext egl_context = video_output_get_egl_context(video_output);
-  mpv_render_context* render_context = video_output_get_render_context(video_output);
-  
-  if (!render_context || !self->buffers_initialized) {
+
+  if (egl_display == EGL_NO_DISPLAY || egl_context == EGL_NO_CONTEXT) {
+    texture_gl_fail(self, "Invalid EGL display or context during resize.");
+    return;
+  }
+
+  if (!eglMakeCurrent(egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                      egl_context)) {
+    g_printerr(
+        "media_kit: TextureGL: eglMakeCurrent failed during resize. "
+        "Error: 0x%x\n",
+        eglGetError());
+    texture_gl_fail(self, "Failed to make EGL context current during resize.");
+    return;
+  }
+
+  for (int i = 0; i < NUM_BUFFERS; i++) {
+    clear_render_buffer(egl_display, &self->buffers[i]);
+  }
+
+  gboolean success = TRUE;
+  for (int i = 0; i < NUM_BUFFERS; i++) {
+    if (!create_render_buffer(&self->buffers[i], egl_display, egl_context,
+                              static_cast<guint32>(required_width),
+                              static_cast<guint32>(required_height))) {
+      success = FALSE;
+      break;
+    }
+  }
+
+  if (!success) {
+    for (int i = 0; i < NUM_BUFFERS; i++) {
+      clear_render_buffer(egl_display, &self->buffers[i]);
+    }
+
+    self->buffers_initialized = FALSE;
+    self->back_index = 0;
+    self->front_index = 1;
+    self->mailbox_state.store(2, std::memory_order_release);
+    texture_gl_fail(self, "Failed to initialize triple buffers.");
+    return;
+  }
+
+  glFlush();
+
+  self->back_index = 0;
+  self->front_index = 1;
+  self->mailbox_state.store(2, std::memory_order_release);
+
+  self->current_width = static_cast<guint32>(required_width);
+  self->current_height = static_cast<guint32>(required_height);
+  self->buffers_initialized = TRUE;
+  self->resizing.store(FALSE, std::memory_order_release);
+  self->initialization_posted = TRUE;
+}
+
+gboolean texture_gl_render(TextureGL* self) {
+  if (self == nullptr || self->video_output == nullptr) {
     return FALSE;
   }
-  
-  // Get the back buffer (producer's exclusive buffer)
-  int back_idx = self->back_index;
-  RenderBuffer* back_buf = &self->buffers[back_idx];
-  
-  if (back_buf->fbo == 0) {
+
+  if (self->hardware_failed.load(std::memory_order_acquire)) {
     return FALSE;
   }
-  
-  // Before reusing this buffer, wait for any previous render to complete
-  // This ensures GPU has finished with this buffer before we overwrite it
-  EGLSyncKHR old_sync = back_buf->render_sync.exchange(EGL_NO_SYNC_KHR, std::memory_order_acq_rel);
+
+  if (!self->buffers_initialized) {
+    return FALSE;
+  }
+
+  VideoOutput* video_output = self->video_output;
+  EGLDisplay egl_display = video_output_get_egl_display(video_output);
+  EGLContext egl_context = video_output_get_egl_context(video_output);
+  mpv_render_context* render_context =
+      video_output_get_render_context(video_output);
+
+  if (egl_display == EGL_NO_DISPLAY || egl_context == EGL_NO_CONTEXT) {
+    return texture_gl_fail(self,
+                           "Invalid EGL display or context during render.");
+  }
+
+  if (render_context == nullptr) {
+    return texture_gl_fail(self, "mpv render context is null during render.");
+  }
+
+  if (media_kit_egl_client_wait_sync_khr == nullptr ||
+      media_kit_egl_create_sync_khr == nullptr ||
+      media_kit_egl_destroy_sync_khr == nullptr) {
+    return texture_gl_fail(self, "EGL sync functions are unavailable.");
+  }
+
+  if (self->back_index < 0 || self->back_index >= NUM_BUFFERS) {
+    return texture_gl_fail(self, "Invalid back buffer index during render.");
+  }
+
+  RenderBuffer* back_buf = &self->buffers[self->back_index];
+
+  if (back_buf->fbo == 0 || back_buf->texture == 0 ||
+      back_buf->egl_image == EGL_NO_IMAGE_KHR) {
+    return texture_gl_fail(self,
+                           "Invalid back buffer resources during render.");
+  }
+
+  if (!eglMakeCurrent(egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                      egl_context)) {
+    g_printerr(
+        "media_kit: TextureGL: eglMakeCurrent failed during render. "
+        "Error: 0x%x\n",
+        eglGetError());
+    return texture_gl_fail(self,
+                           "Failed to make EGL context current during render.");
+  }
+
+  EGLSyncKHR old_sync =
+      back_buf->render_sync.exchange(EGL_NO_SYNC_KHR,
+                                     std::memory_order_acq_rel);
   if (old_sync != EGL_NO_SYNC_KHR) {
-    // Wait for previous GPU work to complete, then destroy the sync
-    eglClientWaitSyncKHR(egl_display, old_sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, EGL_FOREVER_KHR);
-    eglDestroySyncKHR(egl_display, old_sync);
+    media_kit_egl_client_wait_sync_khr(
+        egl_display, old_sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR,
+        EGL_FOREVER_KHR);
+    media_kit_egl_destroy_sync_khr(egl_display, old_sync);
   }
-  
-  gint32 required_width = self->current_width;
-  gint32 required_height = self->current_height;
-  
-  // Switch to mpv's isolated context for rendering
-  eglMakeCurrent(egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, egl_context);
-  
-  // Bind back buffer's FBO
+
   glBindFramebuffer(GL_FRAMEBUFFER, back_buf->fbo);
-  
-  // Render mpv frame to back buffer's texture
-  mpv_opengl_fbo fbo{(gint32)back_buf->fbo, required_width, required_height, 0};
+
+  GLenum framebuffer_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+  if (framebuffer_status != GL_FRAMEBUFFER_COMPLETE) {
+    g_printerr(
+        "media_kit: TextureGL: Render FBO incomplete. Status: 0x%x\n",
+        framebuffer_status);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return texture_gl_fail(self, "Render framebuffer is incomplete.");
+  }
+
+  mpv_opengl_fbo fbo{
+      static_cast<gint32>(back_buf->fbo),
+      static_cast<gint32>(self->current_width),
+      static_cast<gint32>(self->current_height),
+      0,
+  };
+
   int flip_y = 0;
   mpv_render_param params[] = {
       {MPV_RENDER_PARAM_OPENGL_FBO, &fbo},
       {MPV_RENDER_PARAM_FLIP_Y, &flip_y},
-      {MPV_RENDER_PARAM_INVALID, NULL},
+      {MPV_RENDER_PARAM_INVALID, nullptr},
   };
+
+  clear_gl_errors();
   mpv_render_context_render(render_context, params);
-  
-  // Unbind FBO
+
+  GLenum gl_error = glGetError();
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
-  
-  // Flush to ensure rendering commands are submitted to GPU
+
+  if (gl_error != GL_NO_ERROR) {
+    if (!self->render_gl_error_logged) {
+      g_printerr("media_kit: TextureGL: GL error after mpv render: 0x%x\n",
+                 gl_error);
+      self->render_gl_error_logged = TRUE;
+    }
+
+    self->consecutive_render_errors++;
+    if (self->consecutive_render_errors >= 5) {
+      return texture_gl_fail(self, "Too many consecutive GL render errors.");
+    }
+
+    return texture_gl_skip_frame(self,
+                                 "Skipping frame after GL render error.");
+  }
+
+  self->consecutive_render_errors = 0;
+  self->render_gl_error_logged = FALSE;
+  self->skip_frame_error_logged = FALSE;
+
   glFlush();
-  
-  // Create sync fence to mark render completion
-  // Consumer will use this for GPU-side synchronization
-  EGLSyncKHR new_sync = eglCreateSyncKHR(egl_display, EGL_SYNC_FENCE_KHR, NULL);
+
+  EGLSyncKHR new_sync =
+      media_kit_egl_create_sync_khr(egl_display, EGL_SYNC_FENCE_KHR, nullptr);
+  if (new_sync == EGL_NO_SYNC_KHR) {
+    if (!self->sync_error_logged) {
+      g_printerr(
+          "media_kit: TextureGL: eglCreateSyncKHR failed. Error: 0x%x\n",
+          eglGetError());
+      self->sync_error_logged = TRUE;
+    }
+    return TRUE;
+  }
+
   back_buf->render_sync.store(new_sync, std::memory_order_release);
-  
+  self->sync_error_logged = FALSE;
   return TRUE;
 }
 
-/**
- * Publishes the rendered frame using mailbox swap.
- * Atomically swaps back buffer with mailbox and sets dirty flag in ONE operation.
- * Called from dedicated GL thread after render finishes.
- */
 void texture_gl_swap_buffers(TextureGL* self) {
-  // Atomic swap with dirty flag set:
-  // We put our back_index into mailbox with dirty=1
-  // We get back the old mailbox index (ignore its dirty flag)
-  int new_state = (1 << 8) | self->back_index;  // dirty=1, index=back_index
-  int old_state = self->mailbox_state.exchange(new_state, std::memory_order_acq_rel);
-  // Extract just the index from old state (ignore dirty flag)
-  self->back_index = old_state & 0xFF;
+  if (self == nullptr) {
+    return;
+  }
+
+  if (self->hardware_failed.load(std::memory_order_acquire)) {
+    return;
+  }
+
+  if (self->back_index < 0 || self->back_index >= NUM_BUFFERS) {
+    texture_gl_fail(self, "Invalid back buffer index during swap.");
+    return;
+  }
+
+  int new_state = (1 << 8) | self->back_index;
+  int old_state =
+      self->mailbox_state.exchange(new_state, std::memory_order_acq_rel);
+
+  int old_index = old_state & 0xFF;
+  if (old_index < 0 || old_index >= NUM_BUFFERS) {
+    texture_gl_fail(self, "Invalid mailbox buffer index during swap.");
+    return;
+  }
+
+  self->back_index = old_index;
 }
 
-/**
- * Populates texture with video frame using mailbox model.
- * Called from Flutter's main thread.
- */
 gboolean texture_gl_populate_texture(FlTextureGL* texture,
                                      guint32* target,
                                      guint32* name,
                                      guint32* width,
                                      guint32* height,
                                      GError** error) {
+  if (texture == nullptr) {
+    return FALSE;
+  }
+
+  if (target == nullptr || name == nullptr || width == nullptr ||
+      height == nullptr) {
+    return FALSE;
+  }
+
   TextureGL* self = TEXTURE_GL(texture);
+  if (self == nullptr) {
+    return FALSE;
+  }
+
   VideoOutput* video_output = self->video_output;
-  GLRenderThread* gl_thread = video_output_get_gl_render_thread(video_output);
-  EGLDisplay egl_display = video_output_get_egl_display(video_output);
-  
-  // Trigger initialization on first call
+  if (video_output == nullptr) {
+    return texture_gl_return_dummy_texture(self, target, name, width, height);
+  }
+
+  if (self->hardware_failed.load(std::memory_order_acquire)) {
+    return texture_gl_return_dummy_texture(self, target, name, width, height);
+  }
+
   if (!self->initialization_posted && !self->buffers_initialized) {
     gint64 required_width = video_output_get_width(video_output);
     gint64 required_height = video_output_get_height(video_output);
-    
-    if (required_width > 0 && required_height > 0 && gl_thread) {
+    GLRenderThread* gl_thread = video_output_get_gl_render_thread(video_output);
+
+    if (required_width > 0 && required_height > 0 && gl_thread != NULL) {
       self->initialization_posted = TRUE;
       video_output_notify_render(video_output);
     }
   }
-  
-  // If resize is in progress, return dummy texture
+
   if (self->resizing.load(std::memory_order_acquire)) {
-    *target = GL_TEXTURE_2D;
-    static guint32 dummy_texture = 0;
-    if (dummy_texture == 0) {
-      glGenTextures(1, &dummy_texture);
-      glBindTexture(GL_TEXTURE_2D, dummy_texture);
-      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-      glBindTexture(GL_TEXTURE_2D, 0);
-    }
-    *name = dummy_texture;
-    *width = 1;
-    *height = 1;
-    return TRUE;
+    return texture_gl_return_dummy_texture(self, target, name, width, height);
   }
-  
-  // Drain-only consumer: only swap if mailbox has new content (dirty flag set)
-  // Use CAS loop to atomically check dirty and swap in one operation
+
+  if (!self->buffers_initialized) {
+    return texture_gl_return_dummy_texture(self, target, name, width, height);
+  }
+
+  EGLDisplay egl_display = video_output_get_egl_display(video_output);
+  if (egl_display == EGL_NO_DISPLAY) {
+    texture_gl_fail(self, "Invalid EGL display during populate.");
+    return texture_gl_return_dummy_texture(self, target, name, width, height);
+  }
+
   int current_state = self->mailbox_state.load(std::memory_order_acquire);
-  while (current_state & 0x100) {  // Check dirty flag (bit 8)
-    // Mailbox has new frame - try to swap
-    // New state: dirty=0, index=our front_index
-    int new_state = self->front_index;  // dirty=0, index=front_index
-    if (self->mailbox_state.compare_exchange_weak(current_state, new_state,
-                                                   std::memory_order_acq_rel,
-                                                   std::memory_order_acquire)) {
-      // Swap succeeded - extract the index we got
-      self->front_index = current_state & 0xFF;
+  while (current_state & 0x100) {
+    int mailbox_index = current_state & 0xFF;
+    if (mailbox_index < 0 || mailbox_index >= NUM_BUFFERS ||
+        self->front_index < 0 || self->front_index >= NUM_BUFFERS) {
+      texture_gl_fail(self, "Invalid mailbox buffer index during populate.");
+      return texture_gl_return_dummy_texture(self, target, name, width,
+                                             height);
+    }
+
+    int new_state = self->front_index;
+    if (self->mailbox_state.compare_exchange_weak(
+            current_state, new_state, std::memory_order_acq_rel,
+            std::memory_order_acquire)) {
+      self->front_index = mailbox_index;
       break;
     }
-    // CAS failed, current_state has been updated, retry
   }
-  // If dirty was not set, we keep using current front buffer
-  
-  // front_index points to the frame we should display
-  int front_idx = self->front_index;
-  RenderBuffer* front_buf = &self->buffers[front_idx];
-  
-  // GPU synchronization: ensure producer's rendering is complete before we use the texture
-  // Take ownership of the sync object atomically
-  EGLSyncKHR sync = front_buf->render_sync.exchange(EGL_NO_SYNC_KHR, std::memory_order_acq_rel);
+
+  if (self->front_index < 0 || self->front_index >= NUM_BUFFERS) {
+    texture_gl_fail(self, "Invalid front buffer index during populate.");
+    return texture_gl_return_dummy_texture(self, target, name, width, height);
+  }
+
+  RenderBuffer* front_buf = &self->buffers[self->front_index];
+  if (front_buf->egl_image == EGL_NO_IMAGE_KHR) {
+    return texture_gl_return_dummy_texture(self, target, name, width, height);
+  }
+
+  EGLSyncKHR sync =
+      front_buf->render_sync.exchange(EGL_NO_SYNC_KHR,
+                                      std::memory_order_acq_rel);
   if (sync != EGL_NO_SYNC_KHR) {
-    // Use GPU-side wait for better performance (doesn't block CPU)
-    // This inserts a wait into Flutter's GL command stream
-    if (epoxy_has_egl_extension(egl_display, "EGL_KHR_wait_sync")) {
-      eglWaitSyncKHR(egl_display, sync, 0);
-    } else {
-      // Fallback to CPU wait if eglWaitSyncKHR not available
-      eglClientWaitSyncKHR(egl_display, sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, EGL_FOREVER_KHR);
+    EGLint wait_result = EGL_FALSE;
+    if (media_kit_egl_wait_sync_khr != nullptr) {
+      wait_result = media_kit_egl_wait_sync_khr(egl_display, sync, 0);
+    } else if (media_kit_egl_client_wait_sync_khr != nullptr) {
+      wait_result = media_kit_egl_client_wait_sync_khr(
+          egl_display, sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR,
+          EGL_FOREVER_KHR);
     }
-    // Destroy the sync after use (we own it now)
-    eglDestroySyncKHR(egl_display, sync);
+
+    if (wait_result == EGL_FALSE && !self->wait_sync_error_logged) {
+      g_printerr("media_kit: TextureGL: EGL sync wait failed. Error: 0x%x\n",
+                 eglGetError());
+      self->wait_sync_error_logged = TRUE;
+    }
+
+    if (media_kit_egl_destroy_sync_khr != nullptr) {
+      media_kit_egl_destroy_sync_khr(egl_display, sync);
+    }
   }
-  
-  // Check if we need to create/recreate Flutter texture for this buffer
-  if (!front_buf->flutter_texture_valid && front_buf->egl_image != EGL_NO_IMAGE_KHR) {
-    // Delete old texture if exists
-    if (front_buf->flutter_texture != 0) {
-      glDeleteTextures(1, &front_buf->flutter_texture);
-    }
-    
-    // Create Flutter's texture from this buffer's EGLImage
+
+  if (!front_buf->flutter_texture_valid &&
+      front_buf->egl_image != EGL_NO_IMAGE_KHR) {
+    clear_flutter_texture(front_buf);
+
     glGenTextures(1, &front_buf->flutter_texture);
+    if (front_buf->flutter_texture == 0) {
+      front_buf->flutter_texture_valid = FALSE;
+      return texture_gl_return_dummy_texture(self, target, name, width,
+                                             height);
+    }
+
+    SavedTextureState saved_state = save_texture_state();
+
     glBindTexture(GL_TEXTURE_2D, front_buf->flutter_texture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, front_buf->egl_image);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    
+
+    clear_gl_errors();
+    if (media_kit_gl_egl_image_target_texture_2d_oes != nullptr) {
+      media_kit_gl_egl_image_target_texture_2d_oes(GL_TEXTURE_2D,
+                                                   front_buf->egl_image);
+    }
+
+    GLenum gl_error =
+        media_kit_gl_egl_image_target_texture_2d_oes == nullptr
+            ? GL_INVALID_OPERATION
+            : glGetError();
+
+    restore_texture_state(saved_state);
+
+    if (gl_error != GL_NO_ERROR) {
+      if (!self->flutter_texture_error_logged) {
+        g_printerr(
+            "media_kit: TextureGL: Failed to bind EGLImage to Flutter "
+            "texture. Error: 0x%x\n",
+            gl_error);
+        self->flutter_texture_error_logged = TRUE;
+      }
+      clear_flutter_texture(front_buf);
+      return texture_gl_return_dummy_texture(self, target, name, width,
+                                             height);
+    }
+
     front_buf->flutter_texture_valid = TRUE;
-    
-    // Notify Flutter about texture availability
+    self->flutter_texture_error_logged = FALSE;
     video_output_notify_texture_update(video_output);
   }
-  
+
+  if (!front_buf->flutter_texture_valid || front_buf->flutter_texture == 0) {
+    return texture_gl_return_dummy_texture(self, target, name, width, height);
+  }
+
   *target = GL_TEXTURE_2D;
   *name = front_buf->flutter_texture;
   *width = self->current_width;
   *height = self->current_height;
-  
-  // If texture is not valid yet, return dummy texture
-  if (!front_buf->flutter_texture_valid || front_buf->flutter_texture == 0) {
-    static guint32 dummy_texture = 0;
-    if (dummy_texture == 0) {
-      glGenTextures(1, &dummy_texture);
-      glBindTexture(GL_TEXTURE_2D, dummy_texture);
-      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-      glBindTexture(GL_TEXTURE_2D, 0);
-    }
-    *name = dummy_texture;
-    *width = 1;
-    *height = 1;
-  }
-  
   return TRUE;
 }

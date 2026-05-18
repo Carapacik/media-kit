@@ -1,7 +1,7 @@
 // This file is a part of media_kit
 // (https://github.com/media-kit/media-kit).
 //
-// Copyright © 2025 Predidit.
+// Copyright © 2026 Predidit.
 // All rights reserved.
 // Use of this source code is governed by MIT license that can be found in the
 // LICENSE file.
@@ -22,12 +22,12 @@ class GLRenderThread {
   GLRenderThread();
   ~GLRenderThread();
 
-  // Post a task to the GL render thread
-  void Post(std::function<void()> task);
-  
+  // Post a task to the GL render thread.
+  bool Post(std::function<void()> task);
+
   // Post a task and wait for completion (synchronous)
   void PostAndWait(std::function<void()> task);
-  
+
   // Check if we're on the GL render thread
   bool IsCurrentThread() const;
 
