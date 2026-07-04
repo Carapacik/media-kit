@@ -76,6 +76,7 @@ Future<void> paintFirstFrame(BuildContext context) async {
 class PaintFirstFrameScreen extends StatelessWidget {
   final List<Player> players;
   final List<VideoController> controllers;
+
   const PaintFirstFrameScreen({
     super.key,
     required this.players,

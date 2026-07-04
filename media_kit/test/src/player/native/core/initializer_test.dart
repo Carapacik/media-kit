@@ -4,20 +4,19 @@
 /// All rights reserved.
 /// Use of this source code is governed by MIT license that can be found in the LICENSE file.
 
-import 'dart:io';
-import 'dart:ffi';
 import 'dart:async';
+import 'dart:ffi';
+import 'dart:io';
+
+import 'package:media_kit/ffi/ffi.dart';
+import 'package:media_kit/generated/libmpv/bindings.dart';
+import 'package:media_kit/src/player/native/core/initializer.dart';
+import 'package:media_kit/src/player/native/core/native_library.dart';
 import 'package:path/path.dart';
 import 'package:test/test.dart';
 
-import 'package:media_kit/ffi/ffi.dart';
-
-import 'package:media_kit/src/player/native/core/initializer.dart';
-import 'package:media_kit/src/player/native/core/native_library.dart';
-
-import 'package:media_kit/generated/libmpv/bindings.dart';
-
 MPV? _mpv;
+
 MPV get mpv => _mpv!;
 
 void main() {

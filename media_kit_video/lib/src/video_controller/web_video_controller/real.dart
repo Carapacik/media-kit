@@ -3,18 +3,18 @@
 /// Copyright © 2021 & onwards, Hitesh Kumar Saini <saini123hitesh@gmail.com>.
 /// All rights reserved.
 /// Use of this source code is governed by MIT license that can be found in the LICENSE file.
+
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:async';
 import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
-import 'package:web/web.dart' as web;
-
 import 'dart:ui_web';
-import 'package:flutter/rendering.dart';
-import 'package:flutter/foundation.dart';
-import 'package:media_kit/media_kit.dart';
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter/rendering.dart';
+import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/src/video_controller/platform_video_controller.dart';
+import 'package:web/web.dart' as web;
 
 /// {@template web_video_controller}
 ///

@@ -3,6 +3,7 @@
 /// Copyright © 2021 & onwards, Hitesh Kumar Saini <saini123hitesh@gmail.com>.
 /// All rights reserved.
 /// Use of this source code is governed by MIT license that can be found in the LICENSE file.
+
 import 'package:collection/collection.dart';
 
 /// {@template _track}
@@ -18,23 +19,46 @@ abstract class _Track {
   final String id;
   final String? title;
   final String? language;
-  // ----------------------------------------
-  final bool? image; /* image */
-  final bool? albumart; /* albumart */
-  final bool? isDefault; /* default */
-  final String? codec; /* codec */
-  final String? decoder; /* decoder-desc */
-  final int? w; /* demux-w */
-  final int? h; /* demux-h */
-  final int? channelscount; /* demux-channel-count */
-  final String? channels; /* demux-channels */
-  final int? samplerate; /* demux-samplerate */
-  final double? fps; /* demux-fps */
-  final int? bitrate; /* demux-bitrate */
-  final int? rotate; /* demux-rotate */
-  final double? par; /* demux-par */
-  final int? audiochannels; /* audio-channels */
-  // ----------------------------------------
+
+  final bool? image;
+  final bool? albumart;
+
+  /// default
+  final bool? isDefault;
+  final String? codec;
+
+  /// decoder-desc
+  final String? decoder;
+
+  /// demux-w
+  final int? w;
+
+  /// demux-h
+  final int? h;
+
+  /// demux-channel-count
+  final int? channelscount;
+
+  /// demux-channels
+  final String? channels;
+
+  /// demux-samplerate
+  final int? samplerate;
+
+  /// demux-fps
+  final double? fps;
+
+  /// demux-bitrate
+  final int? bitrate;
+
+  /// demux-rotate
+  final int? rotate;
+
+  /// demux-par
+  final double? par;
+
+  /// audio-channels
+  final int? audiochannels;
 
   /// {@macro _track}
   const _Track(

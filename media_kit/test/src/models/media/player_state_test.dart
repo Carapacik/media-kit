@@ -4,14 +4,13 @@
 /// All rights reserved.
 /// Use of this source code is governed by MIT license that can be found in the LICENSE file.
 
-import 'package:test/test.dart';
 import 'package:collection/collection.dart';
-
-import 'package:media_kit/src/models/track.dart';
-import 'package:media_kit/src/models/playlist.dart';
 import 'package:media_kit/src/models/audio_device.dart';
 import 'package:media_kit/src/models/player_state.dart';
+import 'package:media_kit/src/models/playlist.dart';
 import 'package:media_kit/src/models/playlist_mode.dart';
+import 'package:media_kit/src/models/track.dart';
+import 'package:test/test.dart';
 
 void main() {
   test(

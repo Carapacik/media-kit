@@ -3,8 +3,8 @@
 /// Copyright © 2024 & onwards, cillyvms <cillyvms@estrogen.dev>.
 /// All rights reserved.
 /// Use of this source code is governed by MIT license that can be found in the LICENSE file.
-// ignore_for_file: constant_identifier_names
 
+// ignore_for_file: constant_identifier_names
 import 'dart:ffi';
 import 'dart:io';
 

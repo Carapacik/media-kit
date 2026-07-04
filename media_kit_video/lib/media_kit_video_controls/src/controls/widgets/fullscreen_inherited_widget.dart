@@ -3,9 +3,9 @@
 /// Copyright © 2021 & onwards, Hitesh Kumar Saini <saini123hitesh@gmail.com>.
 /// All rights reserved.
 /// Use of this source code is governed by MIT license that can be found in the LICENSE file.
+
 import 'package:flutter/widgets.dart';
 import 'package:media_kit_video/media_kit_video.dart';
-
 import 'package:media_kit_video/media_kit_video_controls/src/controls/methods/video_state.dart';
 
 /// {@template fullscreen_inherited_widget}
@@ -48,6 +48,7 @@ class FullscreenInheritedWidget extends InheritedWidget {
 /// {@endtemplate}
 class _FullscreenInheritedWidgetPopScope extends StatefulWidget {
   final Widget child;
+
   const _FullscreenInheritedWidgetPopScope({
     required this.child,
   });

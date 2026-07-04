@@ -3,6 +3,7 @@
 /// Copyright © 2021 & onwards, Hitesh Kumar Saini <saini123hitesh@gmail.com>.
 /// All rights reserved.
 /// Use of this source code is governed by MIT license that can be found in the LICENSE file.
+
 // ignore_for_file: non_constant_identifier_names
 import 'dart:async';
 
@@ -493,6 +494,7 @@ class MaterialVideoControlsThemeData {
 class MaterialVideoControlsTheme extends InheritedWidget {
   final MaterialVideoControlsThemeData normal;
   final MaterialVideoControlsThemeData fullscreen;
+
   const MaterialVideoControlsTheme({
     super.key,
     required this.normal,
@@ -1958,6 +1960,7 @@ class MaterialCustomButton extends StatelessWidget {
 class MaterialPositionIndicator extends StatefulWidget {
   /// Overriden [TextStyle] for the [MaterialPositionIndicator].
   final TextStyle? style;
+
   const MaterialPositionIndicator({super.key, this.style});
 
   @override
@@ -2025,6 +2028,7 @@ class _BackwardSeekIndicator extends StatefulWidget {
   final Duration duration;
   final void Function(Duration) onChanged;
   final void Function(Duration) onSubmitted;
+
   const _BackwardSeekIndicator({
     required this.duration,
     required this.onChanged,
@@ -2113,6 +2117,7 @@ class _ForwardSeekIndicator extends StatefulWidget {
   final Duration duration;
   final void Function(Duration) onChanged;
   final void Function(Duration) onSubmitted;
+
   const _ForwardSeekIndicator({
     required this.duration,
     required this.onChanged,

@@ -3,15 +3,15 @@
 /// Copyright © 2021 & onwards, Hitesh Kumar Saini <saini123hitesh@gmail.com>.
 /// All rights reserved.
 /// Use of this source code is governed by MIT license that can be found in the LICENSE file.
+
 // ignore_for_file: library_private_types_in_public_api
 import 'dart:collection';
 import 'dart:js_interop';
 import 'dart:typed_data';
-import 'package:web/web.dart' as html;
 
 import 'package:media_kit/src/models/playable.dart';
-
 import 'package:media_kit/src/player/web/utils/asset_loader.dart';
+import 'package:web/web.dart' as web;
 
 /// {@template media}
 ///
@@ -46,7 +46,7 @@ class Media extends Playable {
     // Media.memory : Revoke the object URL.
     try {
       if (memory) {
-        html.URL.revokeObjectURL(uri);
+        web.URL.revokeObjectURL(uri);
       }
     } catch (exeception, stacktrace) {
       print(exeception);
@@ -115,8 +115,8 @@ class Media extends Playable {
     Uint8List data, {
     String? type,
   }) {
-    final blob = html.Blob(<JSUint8Array>[data.toJS].toJS);
-    final object = html.URL.createObjectURL(blob);
+    final blob = web.Blob(<JSUint8Array>[data.toJS].toJS);
+    final object = web.URL.createObjectURL(blob);
     final instance = Media(object);
     instance._memory = true;
     return Future.value(instance);

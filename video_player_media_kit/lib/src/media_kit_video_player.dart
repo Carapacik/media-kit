@@ -3,16 +3,15 @@
 /// Copyright © 2023 & onwards, Hitesh Kumar Saini <saini123hitesh@gmail.com>.
 /// All rights reserved.
 /// Use of this source code is governed by MIT license that can be found in the LICENSE file.
+
 import 'dart:async';
 import 'dart:collection';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:video_player_platform_interface/video_player_platform_interface.dart';
-
-// https://github.com/dart-lang/linter/issues/1381
-// ignore_for_file: close_sinks
 
 /// package:media_kit implementation of [VideoPlayerPlatform].
 ///
@@ -26,7 +25,7 @@ class MediaKitVideoPlayer extends VideoPlayerPlatform {
   final _completers = HashMap<int, Completer<void>>();
   final _videoControllers = HashMap<int, VideoController>();
   final _streamControllers = HashMap<int, StreamController<VideoEvent>>();
-  final _streamSubscriptions = HashMap<int, List<StreamSubscription>>();
+  final _streamSubscriptions = HashMap<int, List<StreamSubscription<Object>>>();
 
   /// Registers this class as the default instance of [VideoPlayerPlatform].
   static void registerWith() {
@@ -68,11 +67,11 @@ class MediaKitVideoPlayer extends VideoPlayerPlatform {
   @override
   Future<int?> create(DataSource dataSource) async {
     final player = Player();
-    final completer = Completer();
+    final completer = Completer<void>();
     final videoController = VideoController(player);
     // NOTE: [StreamController] without broadcast buffers events.
     final streamController = StreamController<VideoEvent>();
-    final streamSubscriptions = <StreamSubscription>[];
+    final streamSubscriptions = <StreamSubscription<Object>>[];
 
     final textureId = player.hashCode;
 

@@ -3,15 +3,16 @@
 /// Copyright © 2021 & onwards, Hitesh Kumar Saini <saini123hitesh@gmail.com>.
 /// All rights reserved.
 /// Use of this source code is governed by MIT license that can be found in the LICENSE file.
+
 // ignore_for_file: non_constant_identifier_names
 import 'dart:async';
-import 'package:flutter/material.dart';
+
 import 'package:flutter/gestures.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit_video/media_kit_video.dart';
-
-import 'package:media_kit_video/media_kit_video_controls/src/controls/methods/video_state.dart';
 import 'package:media_kit_video/media_kit_video_controls/src/controls/extensions/duration.dart';
+import 'package:media_kit_video/media_kit_video_controls/src/controls/methods/video_state.dart';
 import 'package:media_kit_video/media_kit_video_controls/src/controls/widgets/video_controls_theme_data_injector.dart';
 
 /// {@template material_desktop_video_controls}
@@ -335,6 +336,7 @@ class MaterialDesktopVideoControlsThemeData {
 class MaterialDesktopVideoControlsTheme extends InheritedWidget {
   final MaterialDesktopVideoControlsThemeData normal;
   final MaterialDesktopVideoControlsThemeData fullscreen;
+
   const MaterialDesktopVideoControlsTheme({
     super.key,
     required this.normal,
@@ -1538,6 +1540,7 @@ class MaterialDesktopVolumeButtonState
 class MaterialDesktopPositionIndicator extends StatefulWidget {
   /// Overriden [TextStyle] for the [MaterialDesktopPositionIndicator].
   final TextStyle? style;
+
   const MaterialDesktopPositionIndicator({super.key, this.style});
 
   @override

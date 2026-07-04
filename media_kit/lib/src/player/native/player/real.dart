@@ -3,28 +3,24 @@
 /// Copyright © 2021 & onwards, Hitesh Kumar Saini <saini123hitesh@gmail.com>.
 /// All rights reserved.
 /// Use of this source code is governed by MIT license that can be found in the LICENSE file.
+
 import 'dart:async';
 import 'dart:collection';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
+
 import 'package:image/image.dart';
-import 'package:meta/meta.dart';
-import 'package:path/path.dart';
-import 'package:safe_local_storage/safe_local_storage.dart';
-import 'package:synchronized/synchronized.dart';
-import 'package:uri_parser/uri_parser.dart';
-
 import 'package:media_kit/ffi/ffi.dart';
-
+import 'package:media_kit/generated/libmpv/bindings.dart' as generated;
 import 'package:media_kit/src/models/audio_device.dart';
 import 'package:media_kit/src/models/audio_params.dart';
 import 'package:media_kit/src/models/media/media.dart';
 import 'package:media_kit/src/models/playable.dart';
 import 'package:media_kit/src/models/player_log.dart';
 import 'package:media_kit/src/models/player_state.dart';
-import 'package:media_kit/src/models/playlist_mode.dart';
 import 'package:media_kit/src/models/playlist.dart';
+import 'package:media_kit/src/models/playlist_mode.dart';
 import 'package:media_kit/src/models/track.dart';
 import 'package:media_kit/src/models/video_params.dart';
 import 'package:media_kit/src/player/native/core/fallback_bitrate_handler.dart';
@@ -36,8 +32,11 @@ import 'package:media_kit/src/player/native/utils/isolates.dart';
 import 'package:media_kit/src/player/native/utils/native_reference_holder.dart';
 import 'package:media_kit/src/player/native/utils/temp_file.dart';
 import 'package:media_kit/src/player/platform_player.dart';
-
-import 'package:media_kit/generated/libmpv/bindings.dart' as generated;
+import 'package:meta/meta.dart';
+import 'package:path/path.dart';
+import 'package:safe_local_storage/safe_local_storage.dart';
+import 'package:synchronized/synchronized.dart';
+import 'package:uri_parser/uri_parser.dart';
 
 /// Initializes the native backend for package:media_kit.
 void nativeEnsureInitialized({String? libmpv}) {

@@ -73,8 +73,8 @@ class _SinglePlayerMultipleVideoScreenState
               final result = await FilePicker.pickFiles(
                 type: FileType.any,
               );
-              if (result?.files.isNotEmpty ?? false) {
-                await player.open(Media(result!.files.first.path!));
+              if (result.isNotEmpty) {
+                await player.open(Media(result.first.path!));
               }
             },
             child: const Icon(Icons.file_open),

@@ -1,25 +1,24 @@
-import 'dart:io';
 import 'dart:async';
-import 'dart:convert';
 import 'dart:collection';
+import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
-import 'package:test/test.dart';
-import 'package:collection/collection.dart';
-import 'package:universal_platform/universal_platform.dart';
 
-import 'package:media_kit/src/models/track.dart';
-import 'package:media_kit/src/models/playlist.dart';
-import 'package:media_kit/src/models/media/media.dart';
+import 'package:collection/collection.dart';
+import 'package:media_kit/src/media_kit.dart';
 import 'package:media_kit/src/models/audio_device.dart';
 import 'package:media_kit/src/models/audio_params.dart';
-import 'package:media_kit/src/models/video_params.dart';
+import 'package:media_kit/src/models/media/media.dart';
+import 'package:media_kit/src/models/playlist.dart';
 import 'package:media_kit/src/models/playlist_mode.dart';
-
-import 'package:media_kit/src/media_kit.dart';
-import 'package:media_kit/src/player/player.dart';
-import 'package:media_kit/src/player/platform_player.dart';
-import 'package:media_kit/src/player/web/player/player.dart';
+import 'package:media_kit/src/models/track.dart';
+import 'package:media_kit/src/models/video_params.dart';
 import 'package:media_kit/src/player/native/player/player.dart';
+import 'package:media_kit/src/player/platform_player.dart';
+import 'package:media_kit/src/player/player.dart';
+import 'package:media_kit/src/player/web/player/player.dart';
+import 'package:test/test.dart';
+import 'package:universal_platform/universal_platform.dart';
 
 import '../../common/sources.dart';
 

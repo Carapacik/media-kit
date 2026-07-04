@@ -4,8 +4,8 @@
 //
 // Explicit arena used for managing resources.
 
-import 'dart:ffi';
 import 'dart:async';
+import 'dart:ffi';
 
 import 'package:media_kit/ffi/src/allocation.dart';
 

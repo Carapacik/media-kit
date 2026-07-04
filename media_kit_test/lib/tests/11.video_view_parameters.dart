@@ -32,6 +32,7 @@ class _VideoViewParametersScreenState extends State<VideoViewParametersScreen> {
   int fontSizeTick = 0;
   Timer? fitTimer;
   Timer? fontSizeTimer;
+
   @override
   void initState() {
     super.initState();

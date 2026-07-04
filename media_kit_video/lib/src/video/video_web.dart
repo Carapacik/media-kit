@@ -3,19 +3,17 @@
 /// Copyright © 2021 & onwards, Hitesh Kumar Saini <saini123hitesh@gmail.com>.
 /// All rights reserved.
 /// Use of this source code is governed by MIT license that can be found in the LICENSE file.
-// ignore_for_file: avoid_web_libraries_in_flutter
+
+import 'dart:async';
 import 'dart:js_interop';
 
-import 'package:web/web.dart';
-import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:media_kit_video/media_kit_video.dart';
-
 import 'package:media_kit_video/media_kit_video_controls/media_kit_video_controls.dart'
     as media_kit_video_controls;
-import 'package:media_kit_video/src/utils/dispose_safe_notifer.dart';
-
+import 'package:media_kit_video/src/utils/dispose_safe_notifier.dart';
 import 'package:media_kit_video/src/utils/wakelock.dart';
+import 'package:web/web.dart';
 
 /// {@template video}
 ///

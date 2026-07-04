@@ -1,8 +1,8 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
-import 'package:file_picker/file_picker.dart';
 
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 
 import '../common/sources/sources.dart';
@@ -156,6 +156,7 @@ class _TracksSelectorState extends State<TracksSelector> {
 
 class SeekBar extends StatefulWidget {
   final Player player;
+
   const SeekBar({
     super.key,
     required this.player,
@@ -278,14 +279,12 @@ class _SeekBarState extends State<SeekBar> {
 }
 
 Future<void> showFilePicker(BuildContext context, Player player) async {
-  final result = await FilePicker.pickFiles(
-    type: FileType.any,
-    withData: kIsWeb,
-  );
-  if (result?.files.isNotEmpty ?? false) {
-    final file = result!.files.first;
+  final result = await FilePicker.pickFiles(type: FileType.any);
+  if (result.isNotEmpty) {
+    final file = result.first;
     if (kIsWeb) {
-      await player.open(Media(convertBytesToURL(file.bytes!)));
+      final bytes = await file.readAsBytes();
+      await player.open(Media(convertBytesToURL(bytes)));
     } else {
       await player.open(Media(file.path!));
     }

@@ -3,10 +3,11 @@
 /// Copyright © 2021 & onwards, Hitesh Kumar Saini <saini123hitesh@gmail.com>.
 /// All rights reserved.
 /// Use of this source code is governed by MIT license that can be found in the LICENSE file.
+
 import 'dart:async';
 import 'dart:math';
-import 'package:flutter/material.dart';
 
+import 'package:flutter/material.dart';
 import 'package:media_kit_video/src/video_controller/video_controller.dart';
 
 /// {@template subtitle_view}
@@ -45,6 +46,7 @@ class SubtitleViewState extends State<SubtitleView> {
 
   // The reference width for calculating the visible text scale factor.
   static const kTextScaleFactorReferenceWidth = 1920.0;
+
   // The reference height for calculating the visible text scale factor.
   static const kTextScaleFactorReferenceHeight = 1080.0;
 

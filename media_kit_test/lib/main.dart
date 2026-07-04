@@ -34,6 +34,7 @@ Future<void> main() async {
 
 class MyApp extends StatelessWidget {
   final Widget child;
+
   const MyApp(this.child, {super.key});
 
   @override
