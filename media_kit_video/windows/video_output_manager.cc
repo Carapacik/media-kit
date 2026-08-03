@@ -49,8 +49,7 @@ void VideoOutputManager::Dispose(int64_t handle) {
 
 VideoOutputManager::~VideoOutputManager() {
   std::lock_guard<std::mutex> lock(mutex_);
-  // |VideoOutput| destructor will do the relevant cleanup.
+  // Destroy outputs while the manager, registrar and rendering worker are
+  // still valid so each |VideoOutput| can finish its native cleanup.
   video_outputs_.clear();
-  // This destructor is only called when the plugin is being destroyed i.e. the
-  // application is being closed. So, doesn't really matter on the other hand.
 }

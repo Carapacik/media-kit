@@ -7,6 +7,8 @@
 // LICENSE file.
 #include "angle_surface_manager.h"
 
+#include "utils.h"
+
 #include <iostream>
 
 #pragma comment(lib, "dxgi.lib")
@@ -26,7 +28,7 @@ int ANGLESurfaceManager::instance_count_ = 0;
 
 ANGLESurfaceManager::ANGLESurfaceManager(int32_t width, int32_t height)
     : width_(width), height_(height) {
-  mutex_ = ::CreateMutex(NULL, FALSE, NULL);
+  mutex_ = ::CreateMutex(nullptr, FALSE, nullptr);
   Create();
   instance_count_++;
 }
@@ -51,7 +53,7 @@ void ANGLESurfaceManager::Draw(std::function<void()> callback) {
   ::WaitForSingleObject(mutex_, INFINITE);
   MakeCurrent(true);
   callback();
-  SwapBuffers();
+  FinishRendering();
   MakeCurrent(false);
   ::ReleaseMutex(mutex_);
 }
@@ -74,7 +76,7 @@ void ANGLESurfaceManager::MakeCurrent(bool value) {
   }
 }
 
-void ANGLESurfaceManager::SwapBuffers() {
+void ANGLESurfaceManager::FinishRendering() {
   glFinish();
 }
 
@@ -142,7 +144,8 @@ void ANGLESurfaceManager::CleanUp(bool release_context) {
 
 bool ANGLESurfaceManager::CreateD3DTexture() {
   if (d3d_11_device_ == nullptr) {
-    // NOTE: Not enabling Feature Level 12. It crashes directly on Windows 7.
+    // ANGLE's D3D11 backend only needs feature levels through 11_0. Retaining
+    // lower levels allows the renderer to run on older D3D11-capable adapters.
     const auto feature_levels = {
         D3D_FEATURE_LEVEL_11_0,
         D3D_FEATURE_LEVEL_10_1,
@@ -153,17 +156,15 @@ bool ANGLESurfaceManager::CreateD3DTexture() {
     IDXGIAdapter* adapter = nullptr;
     D3D_DRIVER_TYPE driver_type = D3D_DRIVER_TYPE_UNKNOWN;
 
-    // NOTE: Automatically selecting adapter on Windows 10 RTM or greater.
+    // Let D3D11 select the default hardware adapter on Windows 10 or newer.
+    // Keep the explicit first-adapter fallback for older Windows versions.
     if (Utils::IsWindows10RTMOrGreater()) {
-      adapter = NULL;
+      adapter = nullptr;
       driver_type = D3D_DRIVER_TYPE_HARDWARE;
     } else {
       IDXGIFactory* dxgi = nullptr;
       ::CreateDXGIFactory(__uuidof(IDXGIFactory), (void**)&dxgi);
-      // As far as my experience goes, this is the safest approach. Passing NULL
-      // (so-called default) seems to cause issues on Windows 7 or maybe some
-      // older graphics drivers. First adapter is the default.
-      // D3D_DRIVER_TYPE_UNKNOWN| must be passed with manual adapter selection.
+      // Manual adapter selection requires D3D_DRIVER_TYPE_UNKNOWN.
       dxgi->EnumAdapters(0, &adapter);
       dxgi->Release();
     }
@@ -200,12 +201,9 @@ bool ANGLESurfaceManager::CreateD3DTexture() {
   d3d11_texture2D_desc.CPUAccessFlags = 0;
   d3d11_texture2D_desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
 
-  // The general idea is to create two textures, one that is used to |Draw|
-  // using ANGLE & another one that is used for |Read| the rendered content
-  // using |handle|.
-  // The internal texture is copied to the public texture once a frame is
-  // requested using |ID3D11DeviceContext::CopyResource|. This prevents any kind
-  // of synchronization issues.
+  // ANGLE renders into the internal texture. |Read| copies it to the public
+  // texture with |ID3D11DeviceContext::CopyResource| when Flutter requests a
+  // frame, keeping producer and consumer access separate.
 
   // Internal.
   auto hr = d3d_11_device_->CreateTexture2D(&d3d11_texture2D_desc, nullptr,
@@ -243,13 +241,13 @@ bool ANGLESurfaceManager::CreateEGLDisplay() {
                                           EGL_DEFAULT_DISPLAY,
                                           kD3D11DisplayAttributes);
       if (eglInitialize(display_, 0, 0) == EGL_FALSE) {
-        display_ = eglGetPlatformDisplayEXT(EGL_PLATFORM_ANGLE_ANGLE,
-                                            EGL_DEFAULT_DISPLAY,
-                                            kD3D11_9_3DisplayAttributes);
+        display_ = eglGetPlatformDisplayEXT(
+            EGL_PLATFORM_ANGLE_ANGLE, EGL_DEFAULT_DISPLAY,
+            kD3D11FeatureLevel9_3DisplayAttributes);
         if (eglInitialize(display_, 0, 0) == EGL_FALSE) {
           display_ = eglGetPlatformDisplayEXT(EGL_PLATFORM_ANGLE_ANGLE,
                                               EGL_DEFAULT_DISPLAY,
-                                              kWrapDisplayAttributes);
+                                              kD3D11FallbackDisplayAttributes);
           if (eglInitialize(display_, 0, 0) == EGL_FALSE) {
             FAIL("eglGetPlatformDisplayEXT");
           }
