@@ -17,44 +17,50 @@
 
 #include <Windows.h>
 
-#include <d3d.h>
 #include <d3d11.h>
 #include <wrl.h>
-
-#include "utils.h"
 
 #include <cstdint>
 #include <functional>
 
-// |ANGLESurfaceManager| provides an abstraction around ANGLE to easily draw
-// OpenGL ES 2.0 content & read as D3D 11 texture using shared |HANDLE|.
-// * |Draw|: Takes callback where OpenGL ES 2.0 calls can be made for rendering.
-// * |Read|: Copies the drawn content to D3D 11 texture & makes it available to
-//           the shared |handle| for access.
-
-// A large part of implementation is inspired from Flutter.
-// https://github.com/flutter/engine/blob/master/shell/platform/windows/angle_surface_manager.h
+// Owns the ANGLE EGL context and D3D11 textures used by libmpv's OpenGL render
+// API. libmpv draws into an EGL pbuffer backed by an internal shared D3D11
+// texture. |Read| copies the completed frame into the separate texture exposed
+// to Flutter through |handle|.
+//
+// This implementation originated from Flutter's former Windows ANGLE surface
+// manager. Flutter keeps its current Windows EGL implementation here:
+// https://github.com/flutter/flutter/tree/stable/engine/src/flutter/shell/platform/windows/egl
 
 class ANGLESurfaceManager {
  public:
-  const int32_t width() const { return width_; }
-  const int32_t height() const { return height_; }
-  const HANDLE handle() const { return handle_; }
+  int32_t width() const { return width_; }
+  int32_t height() const { return height_; }
+  HANDLE handle() const { return handle_; }
 
   ANGLESurfaceManager(int32_t width, int32_t height);
 
   ~ANGLESurfaceManager();
 
+  ANGLESurfaceManager(const ANGLESurfaceManager&) = delete;
+  ANGLESurfaceManager& operator=(const ANGLESurfaceManager&) = delete;
+
+  // Recreates the EGL surface and its backing D3D11 textures while preserving
+  // the display and context.
   void SetSize(int32_t width, int32_t height);
 
+  // Makes the EGL context current, invokes |callback| and waits for its OpenGL
+  // work to finish before releasing the context.
   void Draw(std::function<void()> callback);
 
+  // Copies the latest completed frame to the D3D11 texture exposed to Flutter.
   void Read();
 
+  // Binds or unbinds this manager's EGL context on the calling thread.
   void MakeCurrent(bool value);
 
  private:
-  void SwapBuffers();
+  void FinishRendering();
 
   void Create();
 
@@ -101,7 +107,7 @@ class ANGLESurfaceManager {
       EGL_TRUE,
       EGL_NONE,
   };
-  static constexpr EGLint kD3D11_9_3DisplayAttributes[] = {
+  static constexpr EGLint kD3D11FeatureLevel9_3DisplayAttributes[] = {
       EGL_PLATFORM_ANGLE_TYPE_ANGLE,
       EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE,
       EGL_PLATFORM_ANGLE_MAX_VERSION_MAJOR_ANGLE,
@@ -112,7 +118,7 @@ class ANGLESurfaceManager {
       EGL_TRUE,
       EGL_NONE,
   };
-  static constexpr EGLint kWrapDisplayAttributes[] = {
+  static constexpr EGLint kD3D11FallbackDisplayAttributes[] = {
       EGL_PLATFORM_ANGLE_TYPE_ANGLE,
       EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE,
       EGL_PLATFORM_ANGLE_ENABLE_AUTOMATIC_TRIM_ANGLE,
@@ -120,7 +126,7 @@ class ANGLESurfaceManager {
       EGL_NONE,
   };
 
-  // Number of active instances of ANGLESurfaceManager.
+  // Number of active instances sharing ANGLE's process-wide EGL display.
   static int32_t instance_count_;
 };
 
