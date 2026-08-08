@@ -28,6 +28,8 @@
 typedef struct _VideoOutputConfiguration {
   std::optional<int64_t> width;
   std::optional<int64_t> height;
+  // Selects libmpv's OpenGL/ANGLE render API instead of its software render
+  // API. Hardware video decoding is configured independently through mpv.
   bool enable_hardware_acceleration;
 
   _VideoOutputConfiguration(std::optional<int64_t> width = std::nullopt,
@@ -42,22 +44,22 @@ class VideoOutput {
  public:
   int64_t texture_id() const { return texture_id_; }
   int64_t width() const {
-    // H/W
+    // OpenGL/ANGLE rendering.
     if (surface_manager_ != nullptr && texture_id_) {
       return surface_manager_->width();
     }
-    // S/W
+    // Software rendering.
     if (pixel_buffer_ != nullptr && texture_id_) {
       return pixel_buffer_textures_.at(texture_id_)->width;
     }
     return width_.value_or(1);
   }
   int64_t height() const {
-    // H/W
+    // OpenGL/ANGLE rendering.
     if (surface_manager_ != nullptr && texture_id_) {
       return surface_manager_->height();
     }
-    // S/W
+    // Software rendering.
     if (pixel_buffer_ != nullptr && texture_id_) {
       return pixel_buffer_textures_.at(texture_id_)->height;
     }
@@ -108,21 +110,21 @@ class VideoOutput {
   std::unordered_map<int64_t, std::unique_ptr<flutter::TextureVariant>>
       texture_variants_ = {};
 
-  // H/W rendering.
+  // OpenGL/ANGLE rendering.
 
   std::unique_ptr<ANGLESurfaceManager> surface_manager_ = nullptr;
   std::unordered_map<int64_t,
                      std::unique_ptr<FlutterDesktopGpuSurfaceDescriptor>>
       textures_ = {};
 
-  // S/W rendering.
+  // Software rendering.
 
   std::unique_ptr<uint8_t[]> pixel_buffer_ = nullptr;
   std::unordered_map<int64_t, std::unique_ptr<FlutterDesktopPixelBuffer>>
       pixel_buffer_textures_ = {};
 
-  // Public notifier. This is called when a new texture is registered & texture
-  // ID is changed. Only happens when video output resolution changes.
+  // Notifies Dart after the initial texture registration and whenever a resize
+  // replaces the registered texture ID or changes its dimensions.
   std::function<void(int64_t, int64_t, int64_t)> texture_update_callback_ =
       [](int64_t, int64_t, int64_t) {};
 };
