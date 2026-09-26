@@ -28,16 +28,16 @@ VideoOutput::VideoOutput(int64_t handle,
       registrar_(registrar),
       thread_pool_ref_(thread_pool_ref) {
   // The constructor must be invoked through the thread pool, because
-  // |ANGLESurfaceManager| & libmpv render context creation can conflict with
+  // |ANGLESurfaceManager| and libmpv render context creation can conflict with
   // the existing |Render| or |Resize| calls from another |VideoOutput|
   // instances (which will result in access violation).
   auto future = thread_pool_ref_->Post([&]() {
     mpv_set_option_string(handle_, "video-sync", "audio");
     mpv_set_option_string(handle_, "video-timing-offset", "0");
-    // First try to initialize video playback with hardware acceleration &
-    // |ANGLESurfaceManager|, use S/W API as fallback.
+    // Prefer libmpv's OpenGL render API through |ANGLESurfaceManager| and fall
+    // back to its software render API when that path is unavailable.
     auto is_hardware_acceleration_enabled = false;
-    // Attempt to use H/W rendering.
+    // Attempt to use OpenGL/ANGLE rendering.
     if (configuration.enable_hardware_acceleration) {
       try {
         // OpenGL context needs to be set before |mpv_render_context_create|.
@@ -62,14 +62,14 @@ VideoOutput::VideoOutput(int64_t handle,
           mpv_render_context_set_update_callback(
               render_context_,
               [](void* context) {
-                // Notify Flutter that a new frame is available. The actual
-                // rendering will take place in the |Render| method, which will
-                // be called by Flutter on the render thread.
+                // Queue rendering on the shared worker. Flutter is notified
+                // after |Render| completes and later reads the texture through
+                // its registered texture callback.
                 auto that = reinterpret_cast<VideoOutput*>(context);
                 that->NotifyRender();
               },
               reinterpret_cast<void*>(this));
-          // Set flag to true, indicating that H/W rendering is supported.
+          // Record that the OpenGL/ANGLE render path initialized successfully.
           is_hardware_acceleration_enabled = true;
           std::cout << "media_kit: VideoOutput: Using H/W rendering."
                     << std::endl;
@@ -77,7 +77,7 @@ VideoOutput::VideoOutput(int64_t handle,
       } catch (...) {
         // Do nothing.
         // Likely received an |std::runtime_error| from |ANGLESurfaceManager|,
-        // which indicates that H/W rendering is not supported.
+        // which indicates that the OpenGL/ANGLE path is unavailable.
       }
     }
     if (!is_hardware_acceleration_enabled) {
@@ -94,9 +94,9 @@ VideoOutput::VideoOutput(int64_t handle,
         mpv_render_context_set_update_callback(
             render_context_,
             [](void* context) {
-              // Notify Flutter that a new frame is available. The actual
-              // rendering will take place in the |Render| method, which will be
-              // called by Flutter on the render thread.
+              // Queue rendering on the shared worker. Flutter is notified
+              // after |Render| completes and later reads the pixel buffer
+              // through its registered texture callback.
               auto that = reinterpret_cast<VideoOutput*>(context);
               that->NotifyRender();
             },
@@ -125,14 +125,13 @@ VideoOutput::~VideoOutput() {
                       << reinterpret_cast<int64_t>(handle_) << std::endl;
             std::lock_guard<std::mutex> lock(textures_mutex_);
             texture_variants_.clear();
-            // H/W
+            // OpenGL/ANGLE rendering.
             textures_.clear();
-            // S/W
+            // Software rendering.
             pixel_buffer_textures_.clear();
-            // Free (call destructor) |ANGLESurfaceManager| through the thread
-            // pool. This will ensure synchronized EGL or ANGLE usage & won't
-            // conflict with |Render| or |CheckAndResize| of other
-            // |VideoOutput|s.
+            // Destroy |ANGLESurfaceManager| through the rendering worker so
+            // EGL and ANGLE cleanup remains serialized with |Render| and
+            // |CheckAndResize| calls from other |VideoOutput| instances.
             surface_manager_.reset(nullptr);
             promise.set_value();
           });
@@ -157,7 +156,7 @@ void VideoOutput::NotifyRender() {
 
 void VideoOutput::Render() {
   if (texture_id_) {
-    // H/W
+    // OpenGL/ANGLE rendering.
     if (surface_manager_ != nullptr) {
       surface_manager_->Draw([&]() {
         mpv_opengl_fbo fbo{
@@ -173,7 +172,7 @@ void VideoOutput::Render() {
         mpv_render_context_render(render_context_, params);
       });
     }
-    // S/W
+    // Software rendering.
     if (pixel_buffer_ != nullptr) {
       int32_t size[]{
           static_cast<int32_t>(pixel_buffer_textures_.at(texture_id_)->width),
@@ -208,11 +207,11 @@ void VideoOutput::SetSize(std::optional<int64_t> width,
                           std::optional<int64_t> height) {
   thread_pool_ref_->Post([&, width, height]() {
     if (width.has_value()) {
-      // H/W
+      // OpenGL/ANGLE rendering.
       if (surface_manager_ != nullptr) {
         width_ = width.value();
       }
-      // S/W
+      // Software rendering.
       if (pixel_buffer_ != nullptr) {
         // Limit width if software rendering is being used.
         width_ = std::clamp(width.value(), static_cast<int64_t>(0),
@@ -222,13 +221,13 @@ void VideoOutput::SetSize(std::optional<int64_t> width,
       width_ = std::nullopt;
     }
     if (height.has_value()) {
-      // H/W
+      // OpenGL/ANGLE rendering.
       if (surface_manager_ != nullptr) {
         height_ = height.value();
       }
-      // S/W
+      // Software rendering.
       if (pixel_buffer_ != nullptr) {
-        // Limit width if software rendering is being used.
+        // Limit height if software rendering is being used.
         height_ = std::clamp(height.value(), static_cast<int64_t>(0),
                              static_cast<int64_t>(SW_RENDERING_MAX_HEIGHT));
       }
@@ -254,8 +253,7 @@ void VideoOutput::CheckAndResize() {
     current_width = pixel_buffer_textures_.at(texture_id_)->width;
     current_height = pixel_buffer_textures_.at(texture_id_)->height;
   }
-  // Currently rendered video output dimensions.
-  // Either H/W or S/W rendered.
+  // Dimensions of the current OpenGL/ANGLE or software output.
   assert(current_width > 0);
   assert(current_height > 0);
   if (required_width == current_width && required_height == current_height) {
@@ -281,11 +279,11 @@ void VideoOutput::Resize(int64_t required_width, int64_t required_height) {
             if (texture_variants_.find(id) != texture_variants_.end()) {
               texture_variants_.erase(id);
             }
-            // H/W
+            // OpenGL/ANGLE rendering.
             if (textures_.find(id) != textures_.end()) {
               textures_.erase(id);
             }
-            // S/W
+            // Software rendering.
             if (pixel_buffer_textures_.find(id) !=
                 pixel_buffer_textures_.end()) {
               pixel_buffer_textures_.erase(id);
@@ -294,7 +292,7 @@ void VideoOutput::Resize(int64_t required_width, int64_t required_height) {
         });
     texture_id_ = 0;
   }
-  // H/W
+  // OpenGL/ANGLE rendering.
   if (surface_manager_ != nullptr) {
     // Destroy internal ID3D11Texture2D & EGLSurface & create new with updated
     // dimensions while preserving previous EGLDisplay & EGLContext.
@@ -331,7 +329,7 @@ void VideoOutput::Resize(int64_t required_width, int64_t required_height) {
     // Notify public texture update callback.
     texture_update_callback_(texture_id_, required_width, required_height);
   }
-  // S/W
+  // Software rendering.
   if (pixel_buffer_ != nullptr) {
     auto pixel_buffer_texture = std::make_unique<FlutterDesktopPixelBuffer>();
     pixel_buffer_texture->buffer = pixel_buffer_.get();
