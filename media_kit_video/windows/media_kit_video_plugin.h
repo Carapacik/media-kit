@@ -8,12 +8,12 @@
 #ifndef MEDIA_KIT_VIDEO_PLUGIN_H_
 #define MEDIA_KIT_VIDEO_PLUGIN_H_
 
+#include <Windows.h>
 #include <flutter/method_channel.h>
 #include <flutter/plugin_registrar_windows.h>
-#include <Windows.h>
 #include <functional>
-#include <queue>
 #include <mutex>
+#include <queue>
 
 #include "video_output_manager.h"
 
@@ -21,6 +21,7 @@ namespace media_kit_video {
 
 class MediaKitVideoPlugin : public flutter::Plugin {
  public:
+  // Registers one plugin instance with the Flutter view's Windows registrar.
   static void RegisterWithRegistrar(flutter::PluginRegistrarWindows* registrar);
 
   MediaKitVideoPlugin(flutter::PluginRegistrarWindows* registrar);
@@ -37,10 +38,15 @@ class MediaKitVideoPlugin : public flutter::Plugin {
       const flutter::MethodCall<flutter::EncodableValue>& method_call,
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
 
+  // Posts |task| to the Flutter window so platform-channel callbacks are sent
+  // from the platform thread.
   void RunOnMainThread(std::function<void()> task);
-  static LRESULT CALLBACK WindowProcDelegate(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
+  static LRESULT CALLBACK WindowProcDelegate(HWND hwnd,
+                                             UINT message,
+                                             WPARAM wParam,
+                                             LPARAM lParam);
   void ProcessMainThreadTasks();
-  
+
   flutter::PluginRegistrarWindows* registrar_ = nullptr;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel_ =
       nullptr;
