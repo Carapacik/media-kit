@@ -154,6 +154,22 @@ class VideoState extends State<Video> with WidgetsBindingObserver {
 
   bool _pauseDueToPauseUponEnteringBackgroundMode = false;
 
+  /// The fullscreen entry callback for this video's window.
+  Future<void> Function() get onEnterFullscreen => _nativeFullscreenCallback(
+        context,
+        widget.onEnterFullscreen,
+        defaultEnterNativeFullscreen,
+        'Utils.EnterNativeFullscreen',
+      );
+
+  /// The fullscreen exit callback for this video's window.
+  Future<void> Function() get onExitFullscreen => _nativeFullscreenCallback(
+        context,
+        widget.onExitFullscreen,
+        defaultExitNativeFullscreen,
+        'Utils.ExitNativeFullscreen',
+      );
+
   // Public API:
   bool isFullscreen() {
     return media_kit_video_controls.isFullscreen(_contextNotifier.value!);
@@ -511,3 +527,24 @@ Future<void> defaultExitNativeFullscreen() async {
   }
 }
 // --------------------------------------------------
+
+Future<void> Function() _nativeFullscreenCallback(
+  BuildContext context,
+  Future<void> Function() callback,
+  Future<void> Function() defaultCallback,
+  String method,
+) {
+  if (Platform.isWindows && callback == defaultCallback) {
+    final viewId = View.of(context).viewId;
+    return () async {
+      try {
+        await const MethodChannel('com.alexmercerind/media_kit_video')
+            .invokeMethod<void>(method, {'viewId': viewId});
+      } catch (exception, stacktrace) {
+        debugPrint(exception.toString());
+        debugPrint(stacktrace.toString());
+      }
+    };
+  }
+  return callback;
+}

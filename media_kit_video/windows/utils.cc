@@ -13,73 +13,36 @@ typedef LONG NTSTATUS, *PNTSTATUS;
 
 typedef NTSTATUS(WINAPI* RtlGetVersionPtr)(PRTL_OSVERSIONINFOW);
 
-void Utils::EnterNativeFullscreen(HWND window) {
-  if (fullscreen_) {
-    return;
+bool Utils::EnterNativeFullscreen(HWND window, FullscreenState& state) {
+  state.style = ::GetWindowLongPtr(window, GWL_STYLE);
+  state.placement.length = sizeof(WINDOWPLACEMENT);
+  auto monitor = MONITORINFO{};
+  monitor.cbSize = sizeof(MONITORINFO);
+  if (!::GetWindowPlacement(window, &state.placement) ||
+      !::GetMonitorInfo(::MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST),
+                        &monitor)) {
+    return false;
   }
-  fullscreen_ = true;
-
-  // The primary idea here is to revolve around |WS_OVERLAPPEDWINDOW| &
-  // detect/set fullscreen based on it. In the window procedure, this is
-  // separately handled. If there is no |WS_OVERLAPPEDWINDOW| style on the
-  // window i.e. in fullscreen, then no area is left for |WM_NCHITTEST|,
-  // accordingly client area is also expanded to fill whole monitor using
-  // |WM_NCCALCSIZE|.
-
-  auto style = ::GetWindowLongPtr(window, GWL_STYLE);
-  if (style & WS_OVERLAPPEDWINDOW) {
-    auto monitor = MONITORINFO{};
-    auto placement = WINDOWPLACEMENT{};
-    monitor.cbSize = sizeof(MONITORINFO);
-    placement.length = sizeof(WINDOWPLACEMENT);
-    ::GetWindowPlacement(window, &placement);
-    rect_before_fullscreen_ = RECT{
-        placement.rcNormalPosition.left,
-        placement.rcNormalPosition.top,
-        placement.rcNormalPosition.right,
-        placement.rcNormalPosition.bottom,
-    };
-    ::GetMonitorInfo(::MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST),
-                     &monitor);
-    ::SetWindowLongPtr(window, GWL_STYLE, style & ~WS_OVERLAPPEDWINDOW);
-    ::SetWindowPos(window, HWND_TOP, monitor.rcMonitor.left,
-                   monitor.rcMonitor.top,
-                   monitor.rcMonitor.right - monitor.rcMonitor.left,
-                   monitor.rcMonitor.bottom - monitor.rcMonitor.top,
-                   SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+  ::SetWindowLongPtr(window, GWL_STYLE, state.style & ~WS_OVERLAPPEDWINDOW);
+  if (!::SetWindowPos(window, HWND_TOP, monitor.rcMonitor.left,
+                      monitor.rcMonitor.top,
+                      monitor.rcMonitor.right - monitor.rcMonitor.left,
+                      monitor.rcMonitor.bottom - monitor.rcMonitor.top,
+                      SWP_NOOWNERZORDER | SWP_FRAMECHANGED)) {
+    ExitNativeFullscreen(window, state);
+    return false;
   }
+  return true;
 }
 
-void Utils::ExitNativeFullscreen(HWND window) {
-  if (!fullscreen_) {
-    return;
-  }
-  fullscreen_ = false;
-
-  auto style = ::GetWindowLongPtr(window, GWL_STYLE);
-  if (!(style & WS_OVERLAPPEDWINDOW)) {
-    ::SetWindowLongPtr(window, GWL_STYLE, style | WS_OVERLAPPEDWINDOW);
-    if (::IsZoomed(window)) {
-      // Refresh the parent window.
+bool Utils::ExitNativeFullscreen(HWND window, const FullscreenState& state) {
+  ::SetWindowLongPtr(window, GWL_STYLE, state.style);
+  const bool restored = ::SetWindowPlacement(window, &state.placement) != FALSE;
+  const bool refreshed =
       ::SetWindowPos(window, nullptr, 0, 0, 0, 0,
                      SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
-                         SWP_FRAMECHANGED);
-      auto rect = RECT{};
-      ::GetClientRect(window, &rect);
-      auto flutter_view =
-          ::FindWindowEx(window, nullptr, kFlutterViewWindowClassName, nullptr);
-      ::SetWindowPos(flutter_view, nullptr, rect.left, rect.top,
-                     rect.right - rect.left, rect.bottom - rect.top,
-                     SWP_NOACTIVATE | SWP_NOZORDER);
-    } else {
-      ::SetWindowPos(
-          window, nullptr, rect_before_fullscreen_.left,
-          rect_before_fullscreen_.top,
-          rect_before_fullscreen_.right - rect_before_fullscreen_.left,
-          rect_before_fullscreen_.bottom - rect_before_fullscreen_.top,
-          SWP_NOACTIVATE | SWP_NOZORDER);
-    }
-  }
+                         SWP_NOOWNERZORDER | SWP_FRAMECHANGED) != FALSE;
+  return restored && refreshed;
 }
 
 RTL_OSVERSIONINFOW Utils::GetWindowsVersion() {
@@ -101,7 +64,3 @@ RTL_OSVERSIONINFOW Utils::GetWindowsVersion() {
 bool Utils::IsWindows10RTMOrGreater() {
   return GetWindowsVersion().dwBuildNumber >= 10240;
 }
-
-bool Utils::fullscreen_ = false;
-
-RECT Utils::rect_before_fullscreen_ = RECT{};

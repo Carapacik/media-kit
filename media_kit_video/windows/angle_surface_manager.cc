@@ -144,11 +144,10 @@ void ANGLESurfaceManager::CleanUp(bool release_context) {
 
 bool ANGLESurfaceManager::CreateD3DTexture() {
   if (d3d_11_device_ == nullptr) {
-    // NOTE: Not enabling Feature Level 12. It crashes directly on Windows 7.
+    // Older runtimes reject unknown feature levels with E_INVALIDARG.
     const auto feature_levels = {
-        D3D_FEATURE_LEVEL_11_0,
-        D3D_FEATURE_LEVEL_10_1,
-        D3D_FEATURE_LEVEL_10_0,
+        D3D_FEATURE_LEVEL_12_1, D3D_FEATURE_LEVEL_12_0, D3D_FEATURE_LEVEL_11_1,
+        D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0,
     };
 
     IDXGIAdapter* adapter = nullptr;
@@ -169,10 +168,19 @@ bool ANGLESurfaceManager::CreateD3DTexture() {
       dxgi->Release();
     }
 
-    auto hr = ::D3D11CreateDevice(
-        adapter, driver_type, 0, 0, feature_levels.begin(),
-        static_cast<UINT>(feature_levels.size()), D3D11_SDK_VERSION,
-        &d3d_11_device_, 0, &d3d_11_device_context_);
+    HRESULT hr = E_INVALIDARG;
+    for (size_t first = 0; first < feature_levels.size(); ++first) {
+      hr = ::D3D11CreateDevice(
+          adapter, driver_type, 0, 0, feature_levels.begin() + first,
+          static_cast<UINT>(feature_levels.size() - first), D3D11_SDK_VERSION,
+          &d3d_11_device_, nullptr, &d3d_11_device_context_);
+      if (hr != E_INVALIDARG) {
+        break;
+      }
+    }
+    if (adapter) {
+      adapter->Release();
+    }
     CHECK_HRESULT("D3D11CreateDevice");
   }
 

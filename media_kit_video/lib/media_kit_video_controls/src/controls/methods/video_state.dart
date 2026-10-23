@@ -28,8 +28,8 @@ VideoController controller(BuildContext context) =>
 
 /// Returns the callback which must be invoked when the video enters fullscreen mode.
 Future<void> Function()? onEnterFullscreen(BuildContext context) =>
-    VideoStateInheritedWidget.of(context).state.widget.onEnterFullscreen;
+    VideoStateInheritedWidget.of(context).state.onEnterFullscreen;
 
 /// Returns the callback which must be invoked when the video exits fullscreen mode.
 Future<void> Function()? onExitFullscreen(BuildContext context) =>
-    VideoStateInheritedWidget.of(context).state.widget.onExitFullscreen;
+    VideoStateInheritedWidget.of(context).state.onExitFullscreen;

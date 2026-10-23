@@ -14,7 +14,9 @@
 #include <functional>
 #include <mutex>
 #include <queue>
+#include <unordered_map>
 
+#include "utils.h"
 #include "video_output_manager.h"
 
 namespace media_kit_video {
@@ -37,7 +39,7 @@ class MediaKitVideoPlugin : public flutter::Plugin {
       const flutter::MethodCall<flutter::EncodableValue>& method_call,
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
 
-  // Posts |task| to the Flutter window so platform-channel callbacks run on
+  // Posts |task| to the task window so platform-channel callbacks run on
   // the platform thread, including those originating on rendering workers.
   void RunOnMainThread(std::function<void()> task);
   static LRESULT CALLBACK WindowProcDelegate(HWND hwnd,
@@ -50,11 +52,12 @@ class MediaKitVideoPlugin : public flutter::Plugin {
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel_ =
       nullptr;
   std::unique_ptr<VideoOutputManager> video_output_manager_ = nullptr;
-  HWND flutter_window_ = nullptr;
-  WNDPROC original_window_proc_ = nullptr;
+  // A message-only window dispatches callbacks even without an implicit view.
+  HWND task_window_ = nullptr;
   std::queue<std::function<void()>> main_thread_tasks_;
   std::mutex main_thread_tasks_mutex_;
-  static MediaKitVideoPlugin* instance_;
+  std::unordered_map<flutter::FlutterViewId, Utils::FullscreenState>
+      fullscreen_windows_;
 };
 
 }  // namespace media_kit_video

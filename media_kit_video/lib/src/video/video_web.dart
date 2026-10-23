@@ -151,6 +151,12 @@ class VideoState extends State<Video> with WidgetsBindingObserver {
 
   ValueKey _key = const ValueKey(true);
 
+  /// The fullscreen entry callback for this video.
+  Future<void> Function() get onEnterFullscreen => widget.onEnterFullscreen;
+
+  /// The fullscreen exit callback for this video.
+  Future<void> Function() get onExitFullscreen => widget.onExitFullscreen;
+
   // Public API:
 
   bool isFullscreen() {

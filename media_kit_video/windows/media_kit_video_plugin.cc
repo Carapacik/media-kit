@@ -6,13 +6,11 @@
 // Use of this source code is governed by MIT license that can be found in the
 // LICENSE file.
 #include "media_kit_video_plugin.h"
-#include "utils.h"
 
 #include <Windows.h>
+#include <stdexcept>
 
 namespace media_kit_video {
-
-MediaKitVideoPlugin* MediaKitVideoPlugin::instance_ = nullptr;
 
 void MediaKitVideoPlugin::RegisterWithRegistrar(
     flutter::PluginRegistrarWindows* registrar) {
@@ -24,12 +22,21 @@ MediaKitVideoPlugin::MediaKitVideoPlugin(
     flutter::PluginRegistrarWindows* registrar)
     : registrar_(registrar),
       video_output_manager_(std::make_unique<VideoOutputManager>(registrar)) {
-  instance_ = this;
-  flutter_window_ =
-      ::GetAncestor(registrar->GetView()->GetNativeWindow(), GA_ROOT);
-  original_window_proc_ = reinterpret_cast<WNDPROC>(
-      ::SetWindowLongPtr(flutter_window_, GWLP_WNDPROC,
-                         reinterpret_cast<LONG_PTR>(WindowProcDelegate)));
+  static constexpr wchar_t kTaskWindowClass[] = L"MediaKitVideoTaskWindow";
+  WNDCLASSW window_class{};
+  window_class.lpfnWndProc = WindowProcDelegate;
+  window_class.hInstance = GetModuleHandle(nullptr);
+  window_class.lpszClassName = kTaskWindowClass;
+  if (!RegisterClassW(&window_class) &&
+      GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+    throw std::runtime_error("Unable to register media_kit task window.");
+  }
+  task_window_ =
+      CreateWindowExW(0, kTaskWindowClass, L"", 0, 0, 0, 0, 0, HWND_MESSAGE,
+                      nullptr, window_class.hInstance, this);
+  if (!task_window_) {
+    throw std::runtime_error("Unable to create media_kit task window.");
+  }
 
   channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
       registrar->messenger(), "com.alexmercerind/media_kit_video",
@@ -40,17 +47,15 @@ MediaKitVideoPlugin::MediaKitVideoPlugin(
 }
 
 MediaKitVideoPlugin::~MediaKitVideoPlugin() {
-  if (flutter_window_ && original_window_proc_) {
-    ::SetWindowLongPtr(flutter_window_, GWLP_WNDPROC,
-                       reinterpret_cast<LONG_PTR>(original_window_proc_));
-  }
-  if (instance_ == this) {
-    instance_ = nullptr;
+  video_output_manager_.reset();
+  if (task_window_) {
+    DestroyWindow(task_window_);
+    task_window_ = nullptr;
   }
 }
 
 void MediaKitVideoPlugin::RunOnMainThread(std::function<void()> task) {
-  if (!flutter_window_) {
+  if (!task_window_) {
     return;
   }
 
@@ -59,21 +64,26 @@ void MediaKitVideoPlugin::RunOnMainThread(std::function<void()> task) {
     main_thread_tasks_.push(std::move(task));
   }
 
-  ::PostMessage(flutter_window_, kMainThreadTaskMessage, 0, 0);
+  ::PostMessage(task_window_, kMainThreadTaskMessage, 0, 0);
 }
 
 LRESULT CALLBACK MediaKitVideoPlugin::WindowProcDelegate(HWND hwnd,
                                                          UINT message,
                                                          WPARAM wParam,
                                                          LPARAM lParam) {
-  if (message == kMainThreadTaskMessage && instance_) {
-    instance_->ProcessMainThreadTasks();
+  if (message == WM_NCCREATE) {
+    auto create = reinterpret_cast<CREATESTRUCTW*>(lParam);
+    SetWindowLongPtrW(hwnd, GWLP_USERDATA,
+                      reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+  }
+  auto instance = reinterpret_cast<MediaKitVideoPlugin*>(
+      GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+  if (message == kMainThreadTaskMessage && instance) {
+    instance->ProcessMainThreadTasks();
     return 0;
   }
-
-  if (instance_ && instance_->original_window_proc_) {
-    return ::CallWindowProc(instance_->original_window_proc_, hwnd, message,
-                            wParam, lParam);
+  if (message == WM_NCDESTROY) {
+    SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
   }
 
   return ::DefWindowProc(hwnd, message, wParam, lParam);
@@ -197,17 +207,59 @@ void MediaKitVideoPlugin::HandleMethodCall(
     }
     video_output_manager_->SetSize(handle_value, width_value, height_value);
     result->Success(flutter::EncodableValue(std::monostate{}));
-  } else if (method_call.method_name().compare("Utils.EnterNativeFullscreen") ==
-             0) {
+  } else if (method_call.method_name() == "Utils.EnterNativeFullscreen" ||
+             method_call.method_name() == "Utils.ExitNativeFullscreen") {
+    // Calls without arguments retain the single-window behavior (view 0).
+    flutter::FlutterViewId view_id = 0;
+    const auto* arguments = method_call.arguments();
+    if (arguments && !std::holds_alternative<std::monostate>(*arguments)) {
+      const auto* map = std::get_if<flutter::EncodableMap>(arguments);
+      if (!map) {
+        result->Error("invalid_arguments", "Expected a map containing viewId.");
+        return;
+      }
+      auto id = map->find(flutter::EncodableValue("viewId"));
+      if (id == map->end() || (!std::holds_alternative<int32_t>(id->second) &&
+                               !std::holds_alternative<int64_t>(id->second))) {
+        result->Error("invalid_arguments", "viewId must be an integer.");
+        return;
+      }
+      view_id = id->second.LongValue();
+    }
+    // Drop saved state for views closed while they were fullscreen.
+    for (auto it = fullscreen_windows_.begin();
+         it != fullscreen_windows_.end();) {
+      if (!registrar_->GetViewById(it->first)) {
+        it = fullscreen_windows_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    auto view = registrar_->GetViewById(view_id);
     auto window =
-        ::GetAncestor(registrar_->GetView()->GetNativeWindow(), GA_ROOT);
-    Utils::EnterNativeFullscreen(window);
-    result->Success(flutter::EncodableValue(std::monostate{}));
-  } else if (method_call.method_name().compare("Utils.ExitNativeFullscreen") ==
-             0) {
-    auto window =
-        ::GetAncestor(registrar_->GetView()->GetNativeWindow(), GA_ROOT);
-    Utils::ExitNativeFullscreen(window);
+        view ? ::GetAncestor(view->GetNativeWindow(), GA_ROOT) : nullptr;
+    if (!window || !::IsWindow(window)) {
+      result->Error("view_not_found",
+                    "The requested Flutter view has no window.");
+      return;
+    }
+    auto saved = fullscreen_windows_.find(view_id);
+    if (method_call.method_name() == "Utils.EnterNativeFullscreen") {
+      if (saved == fullscreen_windows_.end()) {
+        Utils::FullscreenState state{};
+        if (!Utils::EnterNativeFullscreen(window, state)) {
+          result->Error("fullscreen_failed", "Unable to enter fullscreen.");
+          return;
+        }
+        fullscreen_windows_.emplace(view_id, state);
+      }
+    } else if (saved != fullscreen_windows_.end()) {
+      if (!Utils::ExitNativeFullscreen(window, saved->second)) {
+        result->Error("fullscreen_failed", "Unable to restore the window.");
+        return;
+      }
+      fullscreen_windows_.erase(saved);
+    }
     result->Success(flutter::EncodableValue(std::monostate{}));
   } else {
     result->NotImplemented();
