@@ -1170,6 +1170,8 @@ class NativePlayer extends PlatformPlayer {
 
   /// Sets property for the internal libmpv instance of this [Player].
   /// Please use this method only if you know what you are doing, existing methods in [Player] implementation are suited for the most use cases.
+  /// Respects [PlayerConfiguration.async] and waits for the property result.
+  /// libmpv errors are reported through [Player.stream.log].
   ///
   /// See:
   /// * https://mpv.io/manual/master/#options
@@ -1189,11 +1191,7 @@ class NativePlayer extends PlatformPlayer {
       await waitForVideoControllerInitializationIfAttached;
     }
 
-    final name = property.toNativeUtf8();
-    final data = value.toNativeUtf8();
-    mpv.mpv_set_property_string(ctx, name.cast(), data.cast());
-    calloc.free(name);
-    calloc.free(data);
+    await _setPropertyString(property, value);
   }
 
   /// Retrieves the value of a property from the internal libmpv instance of this [Player].
@@ -2509,7 +2507,10 @@ class NativePlayer extends PlatformPlayer {
         }
         _logError(await completer.future, text);
       } else {
-        mpv.mpv_set_property(ctx, namePtr.cast(), format, data);
+        _logError(
+          mpv.mpv_set_property(ctx, namePtr.cast(), format, data),
+          '_setProperty($name, $format)',
+        );
       }
     } finally {
       calloc.free(namePtr);
