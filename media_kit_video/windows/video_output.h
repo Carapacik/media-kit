@@ -9,7 +9,9 @@
 #ifndef VIDEO_OUTPUT_H_
 #define VIDEO_OUTPUT_H_
 
+#include <atomic>
 #include <optional>
+#include <vector>
 
 #include <client.h>
 #include <render.h>
@@ -43,30 +45,6 @@ typedef struct _VideoOutputConfiguration {
 
 class VideoOutput {
  public:
-  int64_t texture_id() const { return texture_id_; }
-  int64_t width() const {
-    // H/W
-    if (surface_manager_ != nullptr && texture_id_) {
-      return surface_manager_->width();
-    }
-    // S/W
-    if (pixel_buffer_ != nullptr && texture_id_) {
-      return pixel_buffer_textures_.at(texture_id_)->width;
-    }
-    return width_.value_or(1);
-  }
-  int64_t height() const {
-    // H/W
-    if (surface_manager_ != nullptr && texture_id_) {
-      return surface_manager_->height();
-    }
-    // S/W
-    if (pixel_buffer_ != nullptr && texture_id_) {
-      return pixel_buffer_textures_.at(texture_id_)->height;
-    }
-    return height_.value_or(1);
-  }
-
   // Initialization and destruction wait for work queued on |thread_pool_ref|;
   // neither may run on that worker. The pool must outlive this output.
   VideoOutput(int64_t handle,
@@ -76,17 +54,32 @@ class VideoOutput {
 
   ~VideoOutput();
 
-  // Immediately reports (texture ID, width, height) on the calling thread;
-  // later resize notifications run on the rendering worker. Marshal any
+  // Reports (texture ID, width, height) on the rendering worker. Marshal any
   // platform-channel work to Flutter's platform thread.
   void SetTextureUpdateCallback(
       std::function<void(int64_t, int64_t, int64_t)> callback);
 
   // Queues size overrides; nullopt uses the video's corresponding dimension.
-  // The texture is resized when the next render update is processed.
+  // Queues a redraw as well, so resizing works while paused.
   void SetSize(std::optional<int64_t> width, std::optional<int64_t> height);
 
  private:
+  struct Frame {
+    media_kit::VideoFrameSize size;
+    std::shared_ptr<ANGLESurfaceManager::TextureGeneration> gpu;
+    std::vector<uint8_t> pixels;
+    std::mutex pixels_mutex;
+    FlutterDesktopGpuSurfaceDescriptor gpu_descriptor{};
+    FlutterDesktopPixelBuffer pixel_descriptor{};
+  };
+  struct TextureRegistration {
+    int64_t id = -1;
+    std::shared_ptr<Frame> frame;
+    std::unique_ptr<flutter::TextureVariant> variant;
+  };
+
+  void RetireTexture();
+  void CleanUp();
   void NotifyRender();
 
   void Render();
@@ -97,38 +90,22 @@ class VideoOutput {
 
   std::optional<media_kit::VideoFrameSize> GetVideoSize();
 
-  std::optional<int64_t> height_ = std::nullopt;
   std::optional<int64_t> width_ = std::nullopt;
+  std::optional<int64_t> height_ = std::nullopt;
   VideoOutputConfiguration configuration_ = VideoOutputConfiguration{};
 
   mpv_handle* handle_ = nullptr;
   mpv_render_context* render_context_ = nullptr;
-  int64_t texture_id_ = 0;
   flutter::PluginRegistrarWindows* registrar_ = nullptr;
   ThreadPool* thread_pool_ref_ = nullptr;
-  // For preventing any asynchronous operations (primarily texture objects
-  // deletion after unregister in |Resize|) access this object after
-  // destruction.
-  bool destroyed_ = false;
-
-  std::mutex textures_mutex_ = std::mutex();
-
-  std::unordered_map<int64_t, std::unique_ptr<flutter::TextureVariant>>
-      texture_variants_ = {};
-
-  // H/W rendering.
-
-  std::unique_ptr<ANGLESurfaceManager> surface_manager_ = nullptr;
-  std::unordered_map<int64_t,
-                     std::unique_ptr<FlutterDesktopGpuSurfaceDescriptor>>
-      textures_ = {};
-
-  // S/W rendering.
-
-  std::unique_ptr<uint8_t[]> pixel_buffer_ = nullptr;
-  std::unordered_map<int64_t, std::unique_ptr<FlutterDesktopPixelBuffer>>
-      pixel_buffer_textures_ = {};
-
+  // Serializes accepting render notifications with the teardown barrier.
+  std::mutex notification_mutex_;
+  std::atomic<bool> destroyed_{false};
+  std::unique_ptr<ANGLESurfaceManager> surface_manager_;
+  bool software_ = false;
+  std::shared_ptr<TextureRegistration> texture_;
+  // Unregister callbacks own only their generation, never this output.
+  std::vector<std::future<void>> retirements_;
   // Reports the initial texture and subsequent texture or dimension changes.
   std::function<void(int64_t, int64_t, int64_t)> texture_update_callback_ =
       [](int64_t, int64_t, int64_t) {};

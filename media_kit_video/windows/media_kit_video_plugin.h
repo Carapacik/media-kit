@@ -11,6 +11,7 @@
 #include <Windows.h>
 #include <flutter/method_channel.h>
 #include <flutter/plugin_registrar_windows.h>
+#include <atomic>
 #include <functional>
 #include <mutex>
 #include <queue>
@@ -55,6 +56,7 @@ class MediaKitVideoPlugin : public flutter::Plugin {
   std::queue<std::function<void()>> main_thread_tasks_;
   std::mutex main_thread_tasks_mutex_;
   static MediaKitVideoPlugin* instance_;
+  std::atomic<bool> shutting_down_{false};
 };
 
 }  // namespace media_kit_video

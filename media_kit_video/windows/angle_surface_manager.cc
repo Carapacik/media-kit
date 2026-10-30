@@ -28,19 +28,26 @@ int ANGLESurfaceManager::instance_count_ = 0;
 
 ANGLESurfaceManager::ANGLESurfaceManager(int32_t width, int32_t height)
     : width_(width), height_(height) {
-  mutex_ = ::CreateMutex(nullptr, FALSE, nullptr);
-  Create();
+  // Include partial construction in display ownership: failed initialization
+  // must not terminate a display still used by an existing output.
   instance_count_++;
+  try {
+    Create();
+  } catch (...) {
+    CleanUp(true);
+    instance_count_--;
+    throw;
+  }
 }
 
 ANGLESurfaceManager::~ANGLESurfaceManager() {
+  std::lock_guard<std::mutex> lock(*mutex_);
   CleanUp(true);
-  ::ReleaseMutex(mutex_);
-  ::CloseHandle(mutex_);
   instance_count_--;
 }
 
 void ANGLESurfaceManager::SetSize(int32_t width, int32_t height) {
+  std::lock_guard<std::mutex> lock(*mutex_);
   if (width == width_ && height == height_) {
     return;
   }
@@ -50,22 +57,30 @@ void ANGLESurfaceManager::SetSize(int32_t width, int32_t height) {
 }
 
 void ANGLESurfaceManager::Draw(std::function<void()> callback) {
-  ::WaitForSingleObject(mutex_, INFINITE);
+  std::lock_guard<std::mutex> lock(*mutex_);
   MakeCurrent(true);
-  callback();
-  FinishRendering();
+  try {
+    callback();
+    FinishRendering();
+  } catch (...) {
+    MakeCurrent(false);
+    throw;
+  }
   MakeCurrent(false);
-  ::ReleaseMutex(mutex_);
 }
 
-void ANGLESurfaceManager::Read() {
-  ::WaitForSingleObject(mutex_, INFINITE);
-  if (d3d_11_device_context_ != nullptr) {
-    d3d_11_device_context_->CopyResource(d3d_11_texture_2D_.Get(),
-                                         internal_d3d_11_texture_2D_.Get());
-    d3d_11_device_context_->Flush();
-  }
-  ::ReleaseMutex(mutex_);
+std::shared_ptr<ANGLESurfaceManager::TextureGeneration>
+ANGLESurfaceManager::GetTextureGeneration() {
+  std::lock_guard<std::mutex> lock(*mutex_);
+  return std::make_shared<TextureGeneration>(
+      TextureGeneration{width_, height_, handle_, internal_d3d_11_texture_2D_,
+                        d3d_11_texture_2D_, d3d_11_device_context_, mutex_});
+}
+
+void ANGLESurfaceManager::TextureGeneration::Read() {
+  std::lock_guard<std::mutex> lock(*mutex);
+  context->CopyResource(destination.Get(), source.Get());
+  context->Flush();
 }
 
 void ANGLESurfaceManager::MakeCurrent(bool value) {
@@ -131,15 +146,10 @@ void ANGLESurfaceManager::CleanUp(bool release_context) {
     }
     surface_ = EGL_NO_SURFACE;
   }
-  // Release D3D 11 texture(s).
-  if (internal_d3d_11_texture_2D_) {
-    internal_d3d_11_texture_2D_->Release();
-    internal_d3d_11_texture_2D_ = nullptr;
-  }
-  if (d3d_11_texture_2D_) {
-    d3d_11_texture_2D_->Release();
-    d3d_11_texture_2D_ = nullptr;
-  }
+  // Release the manager's COM references. Retired TextureGeneration instances
+  // keep their own references until Flutter has unregistered their textures.
+  internal_d3d_11_texture_2D_.Reset();
+  d3d_11_texture_2D_.Reset();
 }
 
 bool ANGLESurfaceManager::CreateD3DTexture() {
@@ -226,7 +236,6 @@ bool ANGLESurfaceManager::CreateD3DTexture() {
   // Retrieve the shared |HANDLE| for interop.
   hr = resource->GetSharedHandle(&internal_handle_);
   CHECK_HRESULT("IDXGIResource::GetSharedHandle");
-  internal_d3d_11_texture_2D_->AddRef();
 
   // External.
   hr = d3d_11_device_->CreateTexture2D(&d3d11_texture2D_desc, nullptr,
@@ -237,7 +246,6 @@ bool ANGLESurfaceManager::CreateD3DTexture() {
   // Retrieve the shared |HANDLE| for interop.
   hr = resource->GetSharedHandle(&handle_);
   CHECK_HRESULT("IDXGIResource::GetSharedHandle");
-  d3d_11_texture_2D_->AddRef();
 
   return true;
 }

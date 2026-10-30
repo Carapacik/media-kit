@@ -22,18 +22,34 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
+#include <mutex>
 
 // |ANGLESurfaceManager| provides an abstraction around ANGLE to easily draw
 // OpenGL ES 2.0 content & read as D3D 11 texture using shared |HANDLE|.
 // * |Draw|: Takes callback where OpenGL ES 2.0 calls can be made for rendering.
-// * |Read|: Copies the drawn content to D3D 11 texture & makes it available to
-//           the shared |handle| for access.
+// * |TextureGeneration::Read|: Copies that generation's completed frame to its
+//   shared texture. Old generations remain valid across resize and teardown.
 
 // A large part of implementation is inspired from Flutter.
 // https://github.com/flutter/engine/blob/master/shell/platform/windows/angle_surface_manager.h
 
 class ANGLESurfaceManager {
  public:
+  // A texture generation can outlive the EGL surface and its manager. Flutter
+  // callbacks keep their own generation until asynchronous unregister finishes.
+  struct TextureGeneration {
+    int32_t width;
+    int32_t height;
+    HANDLE handle;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> source;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> destination;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+    std::shared_ptr<std::mutex> mutex;
+    void Read();
+  };
+
+  std::shared_ptr<TextureGeneration> GetTextureGeneration();
   int32_t width() const { return width_; }
   int32_t height() const { return height_; }
   HANDLE handle() const { return handle_; }
@@ -46,16 +62,13 @@ class ANGLESurfaceManager {
   ANGLESurfaceManager& operator=(const ANGLESurfaceManager&) = delete;
 
   // Recreates the surface and shared textures, changing |handle| while
-  // preserving the EGL display and context. Must not overlap |Draw| or |Read|.
+  // preserving the EGL display and context. Serialized with Draw and generation
+  // Read.
   void SetSize(int32_t width, int32_t height);
 
   // Invokes |callback| with the EGL context current, waits for its GPU work
   // to finish, then unbinds the context. Serialized with |Read|.
   void Draw(std::function<void()> callback);
-
-  // Copies the completed frame to the texture exposed through |handle|.
-  // Called by Flutter's texture callback; does not render through libmpv.
-  void Read();
 
   // Binds or unbinds the EGL context on the calling thread. The caller must
   // serialize context use and unbind it before another thread can bind it.
@@ -80,7 +93,7 @@ class ANGLESurfaceManager {
   HANDLE handle_ = nullptr;
 
   // Sync |Draw| & |Read| calls.
-  HANDLE mutex_ = nullptr;
+  std::shared_ptr<std::mutex> mutex_ = std::make_shared<std::mutex>();
   // D3D 11
   ID3D11Device* d3d_11_device_ = nullptr;
   ID3D11DeviceContext* d3d_11_device_context_ = nullptr;
