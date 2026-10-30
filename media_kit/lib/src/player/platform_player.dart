@@ -136,7 +136,7 @@ abstract class PlatformPlayer {
       logController.close(),
       errorController.close(),
     ]);
-    for (final callback in release) {
+    for (final callback in List.of(release)) {
       try {
         await callback.call();
       } catch (exception, stacktrace) {
@@ -364,6 +364,10 @@ abstract class PlatformPlayer {
 
   /// [Completer] for signaling [VideoController] (from `package:media_kit_video`) initialization.
   final Completer<void> videoControllerCompleter = Completer<void>();
+
+  /// Signals the start of disposal so attached controllers can cancel creation.
+  /// This is distinct from completion of native resource cleanup.
+  final Completer<void> disposeRequested = Completer<void>();
 
   /// [Future<void>] to wait for [VideoController] (from `package:media_kit_video`) initialization.
   Future<void> get waitForVideoControllerInitializationIfAttached {
