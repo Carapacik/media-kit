@@ -37,6 +37,7 @@ if(MEDIA_KIT_LIBS_AVAILABLE)
     "include/media_kit_video/media_kit_video_plugin_c_api.h"
     "media_kit_video_plugin_c_api.cc"
     "media_kit_video_plugin.cc"
+    "platform_task_runner.cc"
     "video_output_manager.cc"
     "video_output.cc"
     "utils.cc"
