@@ -1,6 +1,15 @@
 cmake_minimum_required(VERSION 3.14)
 project(media_kit_windows_tests LANGUAGES CXX)
 enable_testing()
+if(WIN32)
+  add_executable(platform_task_runner_test platform_task_runner_test.cc
+    ../platform_task_runner.cc)
+  target_compile_features(platform_task_runner_test PRIVATE cxx_std_17)
+  target_compile_definitions(platform_task_runner_test PRIVATE
+    _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR UNICODE _UNICODE)
+  target_compile_options(platform_task_runner_test PRIVATE /W4 /WX /EHsc)
+  add_test(NAME platform_task_runner COMMAND platform_task_runner_test)
+endif()
 add_executable(video_frame_size_test video_frame_size_test.cc)
 target_compile_features(video_frame_size_test PRIVATE cxx_std_17)
 if(MSVC)
