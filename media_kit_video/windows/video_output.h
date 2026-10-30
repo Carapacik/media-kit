@@ -24,6 +24,7 @@
 
 #include "angle_surface_manager.h"
 #include "thread_pool.h"
+#include "video_frame_size.h"
 
 typedef struct _VideoOutputConfiguration {
   std::optional<int64_t> width;
@@ -94,9 +95,7 @@ class VideoOutput {
 
   void Resize(int64_t required_width, int64_t required_height);
 
-  int64_t GetVideoWidth();
-
-  int64_t GetVideoHeight();
+  std::optional<media_kit::VideoFrameSize> GetVideoSize();
 
   std::optional<int64_t> height_ = std::nullopt;
   std::optional<int64_t> width_ = std::nullopt;
