@@ -42,7 +42,9 @@ MediaKitVideoPlugin::MediaKitVideoPlugin(
 
 MediaKitVideoPlugin::~MediaKitVideoPlugin() {
   shutting_down_ = true;
-  channel_->SetMethodCallHandler(nullptr);
+  // The engine owns this plugin's lifetime and invalidates its messenger
+  // before invoking registrar destruction callbacks. Its dispatcher is torn
+  // down by the engine; do not call SetMethodCallHandler during destruction.
   video_output_manager_.reset();
   if (flutter_window_ && original_window_proc_) {
     ::SetWindowLongPtr(flutter_window_, GWLP_WNDPROC,
