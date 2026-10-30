@@ -23,7 +23,8 @@ void MediaKitVideoPlugin::RegisterWithRegistrar(
 MediaKitVideoPlugin::MediaKitVideoPlugin(
     flutter::PluginRegistrarWindows* registrar)
     : registrar_(registrar),
-      video_output_manager_(std::make_unique<VideoOutputManager>(registrar)) {
+      video_output_manager_(std::make_unique<VideoOutputManager>(
+          registrar->texture_registrar())) {
   instance_ = this;
   flutter_window_ =
       ::GetAncestor(registrar->GetView()->GetNativeWindow(), GA_ROOT);
