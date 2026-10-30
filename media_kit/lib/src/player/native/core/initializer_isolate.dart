@@ -119,11 +119,11 @@ class InitializerIsolate {
         mpv = generated.MPV(DynamicLibrary.open(message));
         completer.complete();
       } else if (message is bool) {
-        completer.complete();
+        if (!completer.isCompleted) completer.complete();
       } else if (message == null) {
         if (handle != null) {
           disposed = true;
-          completer.complete();
+          if (!completer.isCompleted) completer.complete();
         }
       }
     });

@@ -19,8 +19,9 @@ void VideoOutputManager::Create(
   operations_->Post([=]() {
     try {
       if (video_outputs_.find(handle) == video_outputs_.end()) {
-        auto instance = std::make_unique<VideoOutput>(
-            handle, configuration, registrar_, thread_pool_.get());
+        auto instance =
+            std::make_unique<VideoOutput>(handle, configuration, registrar_,
+                                          thread_pool_.get(), &shutting_down_);
         instance->SetTextureUpdateCallback(texture_update_callback);
         video_outputs_.insert(std::make_pair(handle, std::move(instance)));
       }
@@ -52,6 +53,10 @@ void VideoOutputManager::Dispose(int64_t handle,
 }
 
 VideoOutputManager::~VideoOutputManager() {
+  // The engine may finish unregister callbacks only after this destructor
+  // returns to its platform thread. Callbacks retain their resources
+  // themselves.
+  shutting_down_ = true;
   // Stop accepting work and join the control worker before touching its map.
   operations_.reset();
   // |VideoOutput| destructor will do the relevant cleanup.

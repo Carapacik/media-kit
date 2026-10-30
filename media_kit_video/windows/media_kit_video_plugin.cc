@@ -42,6 +42,7 @@ MediaKitVideoPlugin::MediaKitVideoPlugin(
 
 MediaKitVideoPlugin::~MediaKitVideoPlugin() {
   shutting_down_ = true;
+  channel_->SetMethodCallHandler(nullptr);
   video_output_manager_.reset();
   if (flutter_window_ && original_window_proc_) {
     ::SetWindowLongPtr(flutter_window_, GWLP_WNDPROC,
