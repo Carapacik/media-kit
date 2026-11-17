@@ -1,6 +1,7 @@
 ## Unreleased
 
 - Drop Windows Direct3D feature levels below 10_0.
+- fix(windows): do not crash when the engine has no view at plugin registration; the window is resolved on the first method call.
 
 ## 2.0.1
 
