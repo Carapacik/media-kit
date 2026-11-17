@@ -25,11 +25,9 @@ MediaKitVideoPlugin::MediaKitVideoPlugin(
     : registrar_(registrar),
       video_output_manager_(std::make_unique<VideoOutputManager>(registrar)) {
   instance_ = this;
-  flutter_window_ =
-      ::GetAncestor(registrar->GetView()->GetNativeWindow(), GA_ROOT);
-  original_window_proc_ = reinterpret_cast<WNDPROC>(
-      ::SetWindowLongPtr(flutter_window_, GWLP_WNDPROC,
-                         reinterpret_cast<LONG_PTR>(WindowProcDelegate)));
+  // The engine may be running without a view (e.g. a headless engine whose
+  // views are created later), so the window is resolved lazily.
+  EnsureFlutterWindow();
 
   channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
       registrar->messenger(), "com.alexmercerind/media_kit_video",
@@ -49,7 +47,28 @@ MediaKitVideoPlugin::~MediaKitVideoPlugin() {
   }
 }
 
+HWND MediaKitVideoPlugin::EnsureFlutterWindow() {
+  if (flutter_window_) {
+    return flutter_window_;
+  }
+  auto view = registrar_->GetView();
+  if (!view) {
+    return nullptr;
+  }
+  auto window = ::GetAncestor(view->GetNativeWindow(), GA_ROOT);
+  if (!window) {
+    return nullptr;
+  }
+  flutter_window_ = window;
+  original_window_proc_ = reinterpret_cast<WNDPROC>(
+      ::SetWindowLongPtr(flutter_window_, GWLP_WNDPROC,
+                         reinterpret_cast<LONG_PTR>(WindowProcDelegate)));
+  return flutter_window_;
+}
+
 void MediaKitVideoPlugin::RunOnMainThread(std::function<void()> task) {
+  // Called from worker threads: only uses the window resolved earlier on the
+  // platform thread by |HandleMethodCall|.
   if (!flutter_window_) {
     return;
   }
@@ -101,6 +120,9 @@ void MediaKitVideoPlugin::ProcessMainThreadTasks() {
 void MediaKitVideoPlugin::HandleMethodCall(
     const flutter::MethodCall<flutter::EncodableValue>& method_call,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+  // Method calls arrive on the platform thread; this is where the view is
+  // safe to query. It exists by the time any video output is created.
+  EnsureFlutterWindow();
   if (method_call.method_name().compare("VideoOutputManager.Create") == 0) {
     auto arguments = std::get<flutter::EncodableMap>(*method_call.arguments());
     auto handle =
@@ -199,15 +221,17 @@ void MediaKitVideoPlugin::HandleMethodCall(
     result->Success(flutter::EncodableValue(std::monostate{}));
   } else if (method_call.method_name().compare("Utils.EnterNativeFullscreen") ==
              0) {
-    auto window =
-        ::GetAncestor(registrar_->GetView()->GetNativeWindow(), GA_ROOT);
-    Utils::EnterNativeFullscreen(window);
+    auto window = EnsureFlutterWindow();
+    if (window) {
+      Utils::EnterNativeFullscreen(window);
+    }
     result->Success(flutter::EncodableValue(std::monostate{}));
   } else if (method_call.method_name().compare("Utils.ExitNativeFullscreen") ==
              0) {
-    auto window =
-        ::GetAncestor(registrar_->GetView()->GetNativeWindow(), GA_ROOT);
-    Utils::ExitNativeFullscreen(window);
+    auto window = EnsureFlutterWindow();
+    if (window) {
+      Utils::ExitNativeFullscreen(window);
+    }
     result->Success(flutter::EncodableValue(std::monostate{}));
   } else {
     result->NotImplemented();

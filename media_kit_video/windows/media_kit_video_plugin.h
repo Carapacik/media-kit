@@ -37,6 +37,10 @@ class MediaKitVideoPlugin : public flutter::Plugin {
       const flutter::MethodCall<flutter::EncodableValue>& method_call,
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
 
+  // Returns the top-level Flutter window, hooking its window procedure the
+  // first time it is available. Returns |nullptr| while there is no view.
+  HWND EnsureFlutterWindow();
+
   // Posts |task| to the Flutter window so platform-channel callbacks run on
   // the platform thread, including those originating on rendering workers.
   void RunOnMainThread(std::function<void()> task);
