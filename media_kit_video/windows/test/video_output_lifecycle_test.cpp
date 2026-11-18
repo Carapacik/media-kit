@@ -3,9 +3,12 @@
 #include "../video_output_manager.h"
 
 #include <chrono>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <stdexcept>
+#include <string_view>
+#include <thread>
 
 using namespace std::chrono_literals;
 
@@ -18,6 +21,7 @@ struct mpv_render_context {
   bool hardware;
   mpv_render_update_fn callback = nullptr;
   void* callback_context = nullptr;
+  std::function<void()> on_render{};
 };
 
 bool fail_gl = false, fail_sw = false, fail_render = false;
@@ -64,6 +68,8 @@ int mpv_render_context_render(mpv_render_context* ctx,
                               mpv_render_param* params) {
   if (fail_render)
     return -1;
+  if (ctx->on_render)
+    ctx->on_render();
   if (ctx->hardware) {
     auto* fbo = static_cast<mpv_opengl_fbo*>(params[0].data);
     EGLint width = 0, height = 0;
@@ -209,6 +215,8 @@ void TestFailures(bool hardware) {
   output->SetSize(80, 60);
   worker.Post([] {}).get();
   Check(current_id != first_id, "retry after registration failure failed");
+  Check(registrar.marks == marks + 1,
+        "resize must publish a frame even without an mpv update");
   registrar.Read(current_id, 80, 60);
   registrar.defer = true;
   auto disposal = std::async(std::launch::async, [&] { output.reset(); });
@@ -222,8 +230,93 @@ void TestFailures(bool hardware) {
         "dispose leaked resources");
 }
 
-int main() {
+// Exercise the registered mpv update callback and the real manager queues.
+// Gate the first render so the whole burst arrives while it is in flight.
+// Resize is measured at the new-size notification; dispose at its completion.
+void MeasureRenderQueue(bool resize, int notifications) {
+  using Clock = std::chrono::steady_clock;
+  constexpr auto render_delay = 20ms;
+  std::promise<void> first_render, release;
+  auto released = release.get_future();
+  std::promise<Clock::time_point> completed;
+  auto completion = completed.get_future();
+  std::atomic<int> renders{0};
+  std::atomic<int64_t> sleep_us{0};
+  Registrar registrar;
+  VideoOutputManager manager(&registrar);
+  auto create = [&](int handle) {
+    std::promise<std::string> created;
+    manager.Create(
+        handle, {64, 36, false},
+        [&](auto, auto w, auto h) {
+          if (w == 80 && h == 60)
+            completed.set_value(Clock::now());
+        },
+        [&](auto error) { created.set_value(error); });
+    Check(created.get_future().get().empty(), "queue test create failed");
+    return active_context;
+  };
+  auto* slow = create(1);
+  create(2);
+  slow->on_render = [&] {
+    if (++renders == 1) {
+      first_render.set_value();
+      Check(released.wait_for(5s) == std::future_status::ready,
+            "first render gate timed out");
+    }
+    const auto before_sleep = Clock::now();
+    std::this_thread::sleep_for(render_delay);
+    sleep_us += std::chrono::duration_cast<std::chrono::microseconds>(
+                    Clock::now() - before_sleep)
+                    .count();
+  };
+
+  if (notifications > 0) {
+    slow->callback(slow->callback_context);
+    Check(first_render.get_future().wait_for(5s) == std::future_status::ready,
+          "first update did not enter render");
+    for (int i = 1; i < notifications; ++i)
+      slow->callback(slow->callback_context);
+  }
+  const auto start = Clock::now();
+  if (resize)
+    manager.SetSize(2, 80, 60);
+  else
+    manager.Dispose(2, [&] { completed.set_value(Clock::now()); });
+  release.set_value();
+  Check(completion.wait_for(5s) == std::future_status::ready,
+        "second output operation timed out");
+  const double wait_ms =
+      std::chrono::duration<double, std::milli>(completion.get() - start)
+          .count();
+
+  // Dispose B after its resize frame has been drawn. A stays alive until its
+  // outstanding renders have completed on the shared worker.
+  if (resize) {
+    std::promise<void> disposed;
+    manager.Dispose(2, [&] { disposed.set_value(); });
+    disposed.get_future().get();
+  }
+  const int published = registrar.marks.load() - (resize ? 1 : 0);
+  Check(renders == published, "render and published frame counts differ");
+  Check(published == (notifications == 0 ? 0 : 2),
+        "expected one in-flight render plus one for all queued updates");
+  std::cout << "NotifyRender operation=" << (resize ? "resize" : "dispose")
+            << " notifications=" << notifications << " frames_A=" << published
+            << " delay_per_frame_ms=" << render_delay.count()
+            << " actual_sleep_total_ms=" << sleep_us.load() / 1000.0
+            << " wait_B_ms=" << wait_ms << '\n';
+}
+
+int main(int argc, char** argv) {
   try {
+    if (argc == 2 && std::string_view(argv[1]) == "--render-queue") {
+      for (const bool resize : {true, false}) {
+        MeasureRenderQueue(resize, 0);
+        MeasureRenderQueue(resize, 24);
+      }
+      return 0;
+    }
     {
       ThreadPool worker(1);
       Registrar registrar;
