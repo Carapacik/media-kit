@@ -15,13 +15,15 @@
 VideoOutput::VideoOutput(int64_t handle,
                          VideoOutputConfiguration configuration,
                          flutter::TextureRegistrar* registrar,
-                         ThreadPool* thread_pool_ref)
+                         ThreadPool* thread_pool_ref,
+                         const std::atomic<bool>* shutting_down)
     : width_(configuration.width),
       height_(configuration.height),
       configuration_(configuration),
       handle_(reinterpret_cast<mpv_handle*>(handle)),
       registrar_(registrar),
-      thread_pool_ref_(thread_pool_ref) {
+      thread_pool_ref_(thread_pool_ref),
+      shutting_down_(shutting_down) {
   // EGL and libmpv render operations share one rendering worker across outputs.
   auto future = thread_pool_ref_->Post([this, configuration]() {
     try {
@@ -97,8 +99,13 @@ VideoOutput::~VideoOutput() {
   // All previously accepted tasks precede this barrier. No callback can enqueue
   // a new task after it; unregister callbacks never reference this object.
   thread_pool_ref_->Post([this]() { CleanUp(); }).get();
-  for (auto& retirement : retirements_)
-    retirement.get();
+  for (auto& retirement : retirements_) {
+    while (retirement.wait_for(std::chrono::milliseconds(10)) !=
+           std::future_status::ready) {
+      if (shutting_down_ && shutting_down_->load())
+        break;
+    }
+  }
 }
 
 void VideoOutput::CleanUp() {

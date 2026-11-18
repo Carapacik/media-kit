@@ -50,7 +50,8 @@ class VideoOutput {
   VideoOutput(int64_t handle,
               VideoOutputConfiguration configuration,
               flutter::TextureRegistrar* registrar,
-              ThreadPool* thread_pool_ref);
+              ThreadPool* thread_pool_ref,
+              const std::atomic<bool>* shutting_down = nullptr);
 
   ~VideoOutput();
 
@@ -98,6 +99,9 @@ class VideoOutput {
   mpv_render_context* render_context_ = nullptr;
   flutter::TextureRegistrar* registrar_ = nullptr;
   ThreadPool* thread_pool_ref_ = nullptr;
+  // The manager outlives its outputs. During engine shutdown, unregister owns
+  // retired resources but the platform thread must not wait for its callback.
+  const std::atomic<bool>* shutting_down_ = nullptr;
   // Serializes accepting render notifications with the teardown barrier.
   std::mutex notification_mutex_;
   std::atomic<bool> destroyed_{false};
