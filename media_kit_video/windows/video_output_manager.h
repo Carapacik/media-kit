@@ -76,6 +76,7 @@ class VideoOutputManager {
   // that all the posted tasks are performed on a single thread orderly.
   std::unique_ptr<ThreadPool> thread_pool_ = std::make_unique<ThreadPool>(1);
   flutter::TextureRegistrar* registrar_ = nullptr;
+  std::atomic<bool> shutting_down_{false};
   std::unordered_map<int64_t, std::unique_ptr<VideoOutput>> video_outputs_ = {};
   // Separate from rendering: output destruction may wait for rendering and
   // raster-thread unregister callbacks. FIFO preserves platform-call order.
