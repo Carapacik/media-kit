@@ -30,21 +30,21 @@ class VideoOutputManager {
   void Create(
       int64_t handle,
       VideoOutputConfiguration configuration,
-      std::function<void(int64_t, int64_t, int64_t)> texture_update_callback);
+      std::function<void(int64_t, int64_t, int64_t)> texture_update_callback,
+      std::function<void(std::string)> completion);
 
   // Queues size overrides for an existing output; nullopt follows the video.
-  // The surface / texture is resized on the next render update.
+  // The rendering worker also processes the request while paused.
   void SetSize(int64_t handle,
                std::optional<int64_t> width,
                std::optional<int64_t> height);
 
   // Destroys the |VideoOutput| with given handle.
-  void Dispose(int64_t handle);
+  void Dispose(int64_t handle, std::function<void()> completion);
 
   ~VideoOutputManager();
 
  private:
-  std::mutex mutex_ = std::mutex();
   // All the operations involving ANGLE or EGL or libmpv must be performed on
   // same single thread to prevent any race conditions or invalid ANGLE usage.
   // Not doing so results in access violations & crashes.
@@ -77,6 +77,9 @@ class VideoOutputManager {
   std::unique_ptr<ThreadPool> thread_pool_ = std::make_unique<ThreadPool>(1);
   flutter::PluginRegistrarWindows* registrar_ = nullptr;
   std::unordered_map<int64_t, std::unique_ptr<VideoOutput>> video_outputs_ = {};
+  // Separate from rendering: output destruction may wait for rendering and
+  // raster-thread unregister callbacks. FIFO preserves platform-call order.
+  std::unique_ptr<ThreadPool> operations_ = std::make_unique<ThreadPool>(1);
 };
 
 #endif  // VIDEO_OUTPUT_MANAGER_H_
