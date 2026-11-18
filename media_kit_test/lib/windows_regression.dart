@@ -97,6 +97,7 @@ class _WindowsRegressionState extends State<WindowsRegression> {
     } finally {
       if (mounted) setState(() => busy = false);
       await saveReport();
+      if (widget.automatic) await window.invokeMethod<void>('close');
     }
   }
 
