@@ -95,6 +95,7 @@ class NativePlayer extends PlatformPlayer {
   /// Disposes the [Player] instance & releases the resources.
   @override
   Future<void> dispose({bool synchronized = true}) {
+    if (!disposeRequested.isCompleted) disposeRequested.complete();
     Future<void> function() async {
       if (disposed) {
         throw AssertionError('[Player] has been disposed');
