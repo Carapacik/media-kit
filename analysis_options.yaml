@@ -1,0 +1,4 @@
+analyzer:
+  exclude:
+    # Local build artifacts and source snapshots used for regression comparisons.
+    - build/**
