@@ -11,6 +11,7 @@
 #include <Windows.h>
 #include <flutter/method_channel.h>
 #include <flutter/plugin_registrar_windows.h>
+#include <atomic>
 #include <functional>
 #include <memory>
 
@@ -44,6 +45,7 @@ class MediaKitVideoPlugin : public flutter::Plugin {
       nullptr;
   PlatformTaskRunner platform_tasks_;
   std::unique_ptr<VideoOutputManager> video_output_manager_ = nullptr;
+  std::atomic<bool> shutting_down_{false};
 };
 
 }  // namespace media_kit_video

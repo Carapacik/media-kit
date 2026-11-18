@@ -31,11 +31,16 @@ MediaKitVideoPlugin::MediaKitVideoPlugin(
 }
 
 MediaKitVideoPlugin::~MediaKitVideoPlugin() {
+  shutting_down_ = true;
   video_output_manager_.reset();
   platform_tasks_.Close();
 }
 
 void MediaKitVideoPlugin::RunOnMainThread(std::function<void()> task) {
+  if (shutting_down_) {
+    return;
+  }
+
   platform_tasks_.Post(std::move(task));
 }
 
@@ -69,6 +74,9 @@ void MediaKitVideoPlugin::HandleMethodCall(
     configuration_value.enable_hardware_acceleration =
         configuration_enable_hardware_acceleration;
 
+    auto response =
+        std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>>(
+            std::move(result));
     video_output_manager_->Create(
         handle_value, configuration_value,
         [this, handle = handle_value](auto id, auto width, auto height) {
@@ -108,16 +116,27 @@ void MediaKitVideoPlugin::HandleMethodCall(
                 }),
                 nullptr);
           });
+        },
+        [this, response](std::string error) {
+          RunOnMainThread([response, error]() {
+            if (error.empty())
+              response->Success();
+            else
+              response->Error("VideoOutput.Create", error);
+          });
         });
-    result->Success(flutter::EncodableValue(std::monostate{}));
   } else if (method_call.method_name().compare("VideoOutputManager.Dispose") ==
              0) {
     auto arguments = std::get<flutter::EncodableMap>(*method_call.arguments());
     auto handle =
         std::get<std::string>(arguments[flutter::EncodableValue("handle")]);
     auto handle_value = static_cast<int64_t>(std::stoll(handle.c_str()));
-    video_output_manager_->Dispose(handle_value);
-    result->Success(flutter::EncodableValue(std::monostate{}));
+    auto response =
+        std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>>(
+            std::move(result));
+    video_output_manager_->Dispose(handle_value, [this, response]() {
+      RunOnMainThread([response]() { response->Success(); });
+    });
   } else if (method_call.method_name().compare("VideoOutputManager.SetSize") ==
              0) {
     auto arguments = std::get<flutter::EncodableMap>(*method_call.arguments());
