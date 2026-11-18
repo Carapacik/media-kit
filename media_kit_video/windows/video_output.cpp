@@ -14,7 +14,7 @@
 
 VideoOutput::VideoOutput(int64_t handle,
                          VideoOutputConfiguration configuration,
-                         flutter::PluginRegistrarWindows* registrar,
+                         flutter::TextureRegistrar* registrar,
                          ThreadPool* thread_pool_ref)
     : width_(configuration.width),
       height_(configuration.height),
@@ -129,7 +129,7 @@ void VideoOutput::RetireTexture() {
       retirements_.end());
   retirements_.push_back(completion->get_future());
   const auto id = retired->id;
-  registrar_->texture_registrar()->UnregisterTexture(
+  registrar_->UnregisterTexture(
       id, [retired = std::move(retired), completion]() mutable {
         // The callback, descriptors and COM references remain alive until the
         // engine has stopped requesting this particular registration.
@@ -164,7 +164,9 @@ void VideoOutput::Render() {
       mpv_opengl_fbo fbo{0, frame->size.width, frame->size.height, 0};
       mpv_render_param params[] = {{MPV_RENDER_PARAM_OPENGL_FBO, &fbo},
                                    {MPV_RENDER_PARAM_INVALID, nullptr}};
-      mpv_render_context_render(render_context_, params);
+      const auto error = mpv_render_context_render(render_context_, params);
+      if (error < 0)
+        throw std::runtime_error(mpv_error_string(error));
     });
   } else {
     // Flutter releases this lock only after uploading the returned pixel data.
@@ -181,9 +183,11 @@ void VideoOutput::Render() {
         {MPV_RENDER_PARAM_SW_STRIDE, &stride},
         {MPV_RENDER_PARAM_SW_POINTER, frame->pixels.data()},
         {MPV_RENDER_PARAM_INVALID, nullptr}};
-    mpv_render_context_render(render_context_, params);
+    const auto error = mpv_render_context_render(render_context_, params);
+    if (error < 0)
+      throw std::runtime_error(mpv_error_string(error));
   }
-  registrar_->texture_registrar()->MarkTextureFrameAvailable(texture_->id);
+  registrar_->MarkTextureFrameAvailable(texture_->id);
 }
 
 void VideoOutput::SetTextureUpdateCallback(
@@ -232,23 +236,33 @@ void VideoOutput::Resize(int64_t required_width, int64_t required_height) {
   frame->size = {static_cast<int32_t>(required_width),
                  static_cast<int32_t>(required_height)};
   next->frame = frame;
+  const auto register_texture = [&]() {
+    next->id = registrar_->RegisterTexture(next->variant.get());
+    if (next->id < 0)
+      throw std::runtime_error("Flutter texture registration failed");
+  };
   if (surface_manager_) {
-    surface_manager_->SetSize(frame->size.width, frame->size.height);
-    frame->gpu = surface_manager_->GetTextureGeneration();
-    auto& descriptor = frame->gpu_descriptor;
-    descriptor.struct_size = sizeof(descriptor);
-    descriptor.handle = frame->gpu->handle;
-    descriptor.width = descriptor.visible_width = frame->size.width;
-    descriptor.height = descriptor.visible_height = frame->size.height;
-    descriptor.format = kFlutterDesktopPixelFormatBGRA8888;
-    // Resource lifetime is tied to unregister, not the GPU import callback.
-    // The latter does NOT signal that Flutter's GPU has finished sampling.
-    next->variant =
-        std::make_unique<flutter::TextureVariant>(flutter::GpuSurfaceTexture(
-            kFlutterDesktopGpuSurfaceTypeDxgiSharedHandle, [frame](auto, auto) {
-              frame->gpu->Read();
-              return &frame->gpu_descriptor;
-            }));
+    surface_manager_->SetSize(
+        frame->size.width, frame->size.height, [&](auto gpu) {
+          frame->gpu = std::move(gpu);
+          auto& descriptor = frame->gpu_descriptor;
+          descriptor.struct_size = sizeof(descriptor);
+          descriptor.handle = frame->gpu->handle;
+          descriptor.width = descriptor.visible_width = frame->size.width;
+          descriptor.height = descriptor.visible_height = frame->size.height;
+          descriptor.format = kFlutterDesktopPixelFormatBGRA8888;
+          // Resource lifetime is tied to unregister, not the GPU import
+          // callback. The latter does NOT signal that Flutter's GPU has
+          // finished sampling.
+          next->variant = std::make_unique<flutter::TextureVariant>(
+              flutter::GpuSurfaceTexture(
+                  kFlutterDesktopGpuSurfaceTypeDxgiSharedHandle,
+                  [frame](auto, auto) {
+                    frame->gpu->Read();
+                    return &frame->gpu_descriptor;
+                  }));
+          register_texture();
+        });
   } else {
     const auto layout = media_kit::GetSoftwareFrameLayout(
         frame->size, media_kit::kSoftwareBufferCapacity);
@@ -268,13 +282,10 @@ void VideoOutput::Resize(int64_t required_width, int64_t required_height) {
           frame->pixels_mutex.lock();
           return &frame->pixel_descriptor;
         }));
+    register_texture();
   }
   // The callback is self-contained before registration can expose it to
   // Flutter.
-  next->id =
-      registrar_->texture_registrar()->RegisterTexture(next->variant.get());
-  if (next->id < 0)
-    throw std::runtime_error("Flutter texture registration failed");
   RetireTexture();
   texture_ = std::move(next);
   texture_update_callback_(texture_->id, required_width, required_height);

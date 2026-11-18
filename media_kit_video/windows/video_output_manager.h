@@ -22,7 +22,7 @@
 // to the outputs. Rendering uses a shared single-worker |ThreadPool|.
 class VideoOutputManager {
  public:
-  VideoOutputManager(flutter::PluginRegistrarWindows* registrar);
+  VideoOutputManager(flutter::TextureRegistrar* registrar);
 
   // Creates a new |VideoOutput| unless |handle| already exists. The callback
   // reports (texture ID, width, height) initially and after resizing, from
@@ -75,7 +75,7 @@ class VideoOutputManager {
   // Creating a |ThreadPool| with maximum number of worker threads as 1, ensures
   // that all the posted tasks are performed on a single thread orderly.
   std::unique_ptr<ThreadPool> thread_pool_ = std::make_unique<ThreadPool>(1);
-  flutter::PluginRegistrarWindows* registrar_ = nullptr;
+  flutter::TextureRegistrar* registrar_ = nullptr;
   std::unordered_map<int64_t, std::unique_ptr<VideoOutput>> video_outputs_ = {};
   // Separate from rendering: output destruction may wait for rendering and
   // raster-thread unregister callbacks. FIFO preserves platform-call order.

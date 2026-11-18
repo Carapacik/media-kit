@@ -49,7 +49,7 @@ class VideoOutput {
   // neither may run on that worker. The pool must outlive this output.
   VideoOutput(int64_t handle,
               VideoOutputConfiguration configuration,
-              flutter::PluginRegistrarWindows* registrar,
+              flutter::TextureRegistrar* registrar,
               ThreadPool* thread_pool_ref);
 
   ~VideoOutput();
@@ -96,7 +96,7 @@ class VideoOutput {
 
   mpv_handle* handle_ = nullptr;
   mpv_render_context* render_context_ = nullptr;
-  flutter::PluginRegistrarWindows* registrar_ = nullptr;
+  flutter::TextureRegistrar* registrar_ = nullptr;
   ThreadPool* thread_pool_ref_ = nullptr;
   // Serializes accepting render notifications with the teardown barrier.
   std::mutex notification_mutex_;
