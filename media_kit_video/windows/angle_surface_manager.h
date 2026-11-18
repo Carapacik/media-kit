@@ -64,7 +64,12 @@ class ANGLESurfaceManager {
   // Recreates the surface and shared textures, changing |handle| while
   // preserving the EGL display and context. Serialized with Draw and generation
   // Read.
-  void SetSize(int32_t width, int32_t height);
+  // The optional callback publishes the replacement. If publication fails,
+  // retain the previous surface, handles and dimensions.
+  void SetSize(
+      int32_t width,
+      int32_t height,
+      std::function<void(std::shared_ptr<TextureGeneration>)> publish = {});
 
   // Invokes |callback| with the EGL context current, waits for its GPU work
   // to finish, then unbinds the context. Serialized with |Read|.
@@ -75,6 +80,7 @@ class ANGLESurfaceManager {
   void MakeCurrent(bool value);
 
  private:
+  std::shared_ptr<TextureGeneration> GetTextureGenerationUnlocked();
   void FinishRendering();
 
   void Create();

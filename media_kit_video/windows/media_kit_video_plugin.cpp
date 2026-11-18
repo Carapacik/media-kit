@@ -21,7 +21,8 @@ void MediaKitVideoPlugin::RegisterWithRegistrar(
 MediaKitVideoPlugin::MediaKitVideoPlugin(
     flutter::PluginRegistrarWindows* registrar)
     : registrar_(registrar),
-      video_output_manager_(std::make_unique<VideoOutputManager>(registrar)) {
+      video_output_manager_(std::make_unique<VideoOutputManager>(
+          registrar->texture_registrar())) {
   channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
       registrar->messenger(), "com.alexmercerind/media_kit_video",
       &flutter::StandardMethodCodec::GetInstance());

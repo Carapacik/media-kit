@@ -46,14 +46,46 @@ ANGLESurfaceManager::~ANGLESurfaceManager() {
   instance_count_--;
 }
 
-void ANGLESurfaceManager::SetSize(int32_t width, int32_t height) {
+void ANGLESurfaceManager::SetSize(
+    int32_t width,
+    int32_t height,
+    std::function<void(std::shared_ptr<TextureGeneration>)> publish) {
   std::lock_guard<std::mutex> lock(*mutex_);
   if (width == width_ && height == height_) {
+    if (publish)
+      publish(GetTextureGenerationUnlocked());
     return;
   }
+  // Keep the previous render target until every replacement resource exists.
+  // A failed resize must leave Draw and the published generation usable.
+  const auto old_width = width_;
+  const auto old_height = height_;
+  const auto old_surface = surface_;
+  const auto old_internal_handle = internal_handle_;
+  const auto old_handle = handle_;
+  auto old_internal_texture = std::move(internal_d3d_11_texture_2D_);
+  auto old_texture = std::move(d3d_11_texture_2D_);
+  surface_ = EGL_NO_SURFACE;
+  internal_handle_ = handle_ = nullptr;
   width_ = width;
   height_ = height;
-  Create();
+  try {
+    Create();
+    if (publish)
+      publish(GetTextureGenerationUnlocked());
+  } catch (...) {
+    CleanUp(false);
+    width_ = old_width;
+    height_ = old_height;
+    surface_ = old_surface;
+    internal_handle_ = old_internal_handle;
+    handle_ = old_handle;
+    internal_d3d_11_texture_2D_ = std::move(old_internal_texture);
+    d3d_11_texture_2D_ = std::move(old_texture);
+    throw;
+  }
+  if (old_surface != EGL_NO_SURFACE)
+    eglDestroySurface(display_, old_surface);
 }
 
 void ANGLESurfaceManager::Draw(std::function<void()> callback) {
@@ -72,6 +104,11 @@ void ANGLESurfaceManager::Draw(std::function<void()> callback) {
 std::shared_ptr<ANGLESurfaceManager::TextureGeneration>
 ANGLESurfaceManager::GetTextureGeneration() {
   std::lock_guard<std::mutex> lock(*mutex_);
+  return GetTextureGenerationUnlocked();
+}
+
+std::shared_ptr<ANGLESurfaceManager::TextureGeneration>
+ANGLESurfaceManager::GetTextureGenerationUnlocked() {
   return std::make_shared<TextureGeneration>(
       TextureGeneration{width_, height_, handle_, internal_d3d_11_texture_2D_,
                         d3d_11_texture_2D_, d3d_11_device_context_, mutex_});
@@ -85,7 +122,8 @@ void ANGLESurfaceManager::TextureGeneration::Read() {
 
 void ANGLESurfaceManager::MakeCurrent(bool value) {
   if (value) {
-    eglMakeCurrent(display_, surface_, surface_, context_);
+    if (eglMakeCurrent(display_, surface_, surface_, context_) == EGL_FALSE)
+      throw std::runtime_error("Unable to bind ANGLE EGL context.");
   } else {
     eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
   }
@@ -116,6 +154,8 @@ void ANGLESurfaceManager::Create() {
 }
 
 void ANGLESurfaceManager::CleanUp(bool release_context) {
+  if (display_ != EGL_NO_DISPLAY)
+    eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
   if (release_context) {
     if (display_ != EGL_NO_DISPLAY && context_ != EGL_NO_CONTEXT) {
       eglDestroyContext(display_, context_);
@@ -125,7 +165,7 @@ void ANGLESurfaceManager::CleanUp(bool release_context) {
       eglDestroySurface(display_, surface_);
       surface_ = EGL_NO_SURFACE;
     }
-    if (instance_count_ == 1) {
+    if (instance_count_ == 1 && display_ != EGL_NO_DISPLAY) {
       eglTerminate(display_);
     }
     display_ = EGL_NO_DISPLAY;
@@ -140,7 +180,6 @@ void ANGLESurfaceManager::CleanUp(bool release_context) {
     }
   } else {
     // Clear context & destroy existing |surface_|.
-    eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, context_);
     if (display_ != EGL_NO_DISPLAY && surface_ != EGL_NO_SURFACE) {
       eglDestroySurface(display_, surface_);
     }
@@ -150,6 +189,7 @@ void ANGLESurfaceManager::CleanUp(bool release_context) {
   // keep their own references until Flutter has unregistered their textures.
   internal_d3d_11_texture_2D_.Reset();
   d3d_11_texture_2D_.Reset();
+  internal_handle_ = handle_ = nullptr;
 }
 
 bool ANGLESurfaceManager::CreateD3DTexture() {
@@ -168,14 +208,17 @@ bool ANGLESurfaceManager::CreateD3DTexture() {
       adapter = nullptr;
       driver_type = D3D_DRIVER_TYPE_HARDWARE;
     } else {
-      IDXGIFactory* dxgi = nullptr;
-      ::CreateDXGIFactory(__uuidof(IDXGIFactory), (void**)&dxgi);
+      Microsoft::WRL::ComPtr<IDXGIFactory> dxgi;
+      auto hr =
+          ::CreateDXGIFactory(__uuidof(IDXGIFactory),
+                              reinterpret_cast<void**>(dxgi.GetAddressOf()));
+      CHECK_HRESULT("CreateDXGIFactory");
       // As far as my experience goes, this is the safest approach. Passing NULL
       // (so-called default) seems to cause issues on Windows 7 or maybe some
       // older graphics drivers. First adapter is the default.
       // D3D_DRIVER_TYPE_UNKNOWN| must be passed with manual adapter selection.
-      dxgi->EnumAdapters(0, &adapter);
-      dxgi->Release();
+      hr = dxgi->EnumAdapters(0, &adapter);
+      CHECK_HRESULT("IDXGIFactory::EnumAdapters");
     }
 
     HRESULT hr = E_INVALIDARG;

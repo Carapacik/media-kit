@@ -8,8 +8,7 @@
 
 #include "video_output_manager.h"
 
-VideoOutputManager::VideoOutputManager(
-    flutter::PluginRegistrarWindows* registrar)
+VideoOutputManager::VideoOutputManager(flutter::TextureRegistrar* registrar)
     : registrar_(registrar) {}
 
 void VideoOutputManager::Create(
