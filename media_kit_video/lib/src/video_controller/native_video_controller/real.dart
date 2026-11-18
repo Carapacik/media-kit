@@ -96,11 +96,16 @@ class NativeVideoController extends PlatformVideoController {
         videoParamsWidth = width;
         videoParamsHeight = height;
 
-        await _channel.invokeMethod('VideoOutputManager.SetSize', {
-          'handle': handle.toString(),
-          'width': width.toString(),
-          'height': height.toString(),
-        });
+        await _channel.invokeMethod(
+          'VideoOutputManager.SetSize',
+          {
+            'handle': handle.toString(),
+            // Windows resolves automatic dimensions from one native snapshot.
+            // Preserve explicit output sizes when the video source changes.
+            'width': (Platform.isWindows ? this.width : width).toString(),
+            'height': (Platform.isWindows ? this.height : height).toString(),
+          },
+        );
       }),
     );
   }
@@ -204,11 +209,18 @@ class NativeVideoController extends PlatformVideoController {
     } else {
       this.width = null;
       this.height = null;
-      await _channel.invokeMethod('VideoOutputManager.SetSize', {
-        'handle': handle.toString(),
-        'width': videoParamsWidth?.toString() ?? 'null',
-        'height': videoParamsHeight?.toString() ?? 'null',
-      });
+      await _channel.invokeMethod(
+        'VideoOutputManager.SetSize',
+        {
+          'handle': handle.toString(),
+          'width': Platform.isWindows
+              ? 'null'
+              : videoParamsWidth?.toString() ?? 'null',
+          'height': Platform.isWindows
+              ? 'null'
+              : videoParamsHeight?.toString() ?? 'null',
+        },
+      );
     }
   }
 
