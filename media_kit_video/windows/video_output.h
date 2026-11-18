@@ -104,6 +104,7 @@ class VideoOutput {
   const std::atomic<bool>* shutting_down_ = nullptr;
   // Serializes accepting render notifications with the teardown barrier.
   std::mutex notification_mutex_;
+  bool render_queued_ = false;  // Protected by notification_mutex_.
   std::atomic<bool> destroyed_{false};
   std::unique_ptr<ANGLESurfaceManager> surface_manager_;
   bool software_ = false;

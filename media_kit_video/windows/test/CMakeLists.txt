@@ -39,7 +39,8 @@ if(WIN32 AND MEDIA_KIT_ANGLE_DIR AND MEDIA_KIT_FLUTTER_DIR AND MEDIA_KIT_LIBMPV_
       COMMAND ${CMAKE_COMMAND} -E copy_if_different "${DLL}" "$<TARGET_FILE_DIR:video_output_lifecycle_test>")
   endforeach()
   add_test(NAME video_output_lifecycle COMMAND video_output_lifecycle_test)
-  set_tests_properties(video_output_lifecycle PROPERTIES TIMEOUT 30)
+  add_test(NAME notify_render_queue COMMAND video_output_lifecycle_test --render-queue)
+  set_tests_properties(video_output_lifecycle notify_render_queue PROPERTIES TIMEOUT 30)
 endif()
 add_test(NAME video_frame_size COMMAND video_frame_size_test)
 
